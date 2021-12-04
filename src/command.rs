@@ -1,30 +1,61 @@
 use anyhow::Result;
 use chrono::NaiveTime;
-use teloxide::utils::command::{BotCommand, ParseError};
+use lazy_static::lazy_static;
+use regex::Regex;
 
-/// Parser for queue command arguments. The following formats are supported:
-///
-/// - "/add" Add command with instant (nameless) queue
-/// - "/add 17:07" Add command with timed queue
-fn parse_queue_cmd(input: String) -> Result<(Option<NaiveTime>,), ParseError> {
-    if input.is_empty() {
-        Ok((None,))
-    } else {
-        let parsed_time = NaiveTime::parse_from_str(&input, "%H:%M")
-            .map_err(|e| ParseError::IncorrectFormat(e.into()))?;
+pub static HELP_TEXT: &str = "These commands are supported:
 
-        Ok((Some(parsed_time),))
+```
+- /{hhmm}
+  Add/remove yourself from the timed queue at hh:mm.
+  For example: /1830
+
+- /add
+  Add/remove yourself from the instant queue.
+
+- /rm
+  Remove yourself from all queues.
+```";
+
+pub enum Command {
+    /// Display help text for supported commands.
+    Help,
+
+    /// Add/remove player from instant queue or timed queue.
+    Add(Option<NaiveTime>),
+
+    /// Removes player from all queues.
+    Rm,
+}
+
+impl Command {
+    pub fn descriptions() -> &'static str {
+        HELP_TEXT
     }
 }
 
-#[derive(BotCommand)]
-#[command(rename = "lowercase", description = "These commands are supported:")]
-pub enum Command {
-    #[command(description = "Display this help text.")]
-    Help,
-    #[command(
-        description = "Add yourself to a queue. Use `/add` for instant queue, and `/add HH:MM` for timed queue.",
-        parse_with = "parse_queue_cmd"
-    )]
-    Add(Option<NaiveTime>),
+pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Error + Send + Sync>> {
+    let text = text.trim();
+
+    let cmd = match text {
+        "/help" => Some(Command::Help),
+        "/add" => Some(Command::Add(None)),
+        "/rm" => Some(Command::Rm),
+        _ => {
+            lazy_static! {
+                // Construct a regex that matches commands with four digits
+                // (such as /xxxx).
+                static ref RE: Regex = Regex::new(r"^/\d{4}$").unwrap();
+            }
+
+            if RE.is_match(text) {
+                let parsed_time = NaiveTime::parse_from_str(&text[1..], "%H%M")?;
+                Some(Command::Add(Some(parsed_time)))
+            } else {
+                None
+            }
+        }
+    };
+
+    Ok(cmd)
 }
