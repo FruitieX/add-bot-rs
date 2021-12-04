@@ -1,9 +1,9 @@
 use crate::{
     command::Command,
-    state::{AddRemovePlayerOp, AddRemovePlayerResult},
+    state::{AddRemovePlayerOp, AddRemovePlayerResult, QUEUE_SIZE},
     state_container::StateContainer,
     types::{ChatId, QueueId, UserId},
-    util::{fmt_naive_time, mk_queue_status_msg, mk_username, send_msg},
+    util::{fmt_naive_time, mk_player_usernames_str, mk_queue_status_msg, mk_username, send_msg},
 };
 use chrono::Local;
 use teloxide::{prelude::*, Bot};
@@ -80,12 +80,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                     mk_queue_status_msg(&queue, &queue_id, &op)
                 }
                 AddRemovePlayerResult::QueueFull(queue) => {
-                    let player_usernames = queue
-                        .players
-                        .values()
-                        .map(|username| format!("@{}", username))
-                        .collect::<Vec<String>>()
-                        .join(", ");
+                    let player_usernames = mk_player_usernames_str(&queue, true);
 
                     format!(
                         "Match ready in {} queue! Players: {}",
@@ -109,6 +104,39 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                     mk_queue_status_msg(&queue, &queue_id, &AddRemovePlayerOp::PlayerRemoved);
                 send_msg(&bot, &chat_id, &text, false).await
             }
+        }
+
+        Command::Ls => {
+            let chat = state.chats.get(&chat_id);
+            let queues = chat.map(|chat| chat.queues.clone());
+
+            let text = match queues {
+                Some(queues) if !queues.is_empty() => {
+                    let mut queue_strings: Vec<String> = queues
+                        .iter()
+                        .map(|(queue_id, queue)| {
+                            let total_players = queue.players.len();
+                            let queue_size = QUEUE_SIZE;
+                            let player_usernames = mk_player_usernames_str(queue, false);
+                            format!(
+                                "{} {}/{} ({}) {}",
+                                queue_id,
+                                total_players,
+                                queue_size,
+                                player_usernames,
+                                queue.add_cmd
+                            )
+                        })
+                        .collect();
+
+                    queue_strings.sort();
+
+                    queue_strings.join("\n")
+                }
+                _ => String::from("No active queues."),
+            };
+
+            send_msg(&bot, &chat_id, &text, false).await
         }
     }
 

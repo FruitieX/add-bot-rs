@@ -6,15 +6,21 @@ use regex::Regex;
 pub static HELP_TEXT: &str = "These commands are supported:
 
 ```
+- /help, /info
+  Displays this help text.
+  
 - /{hhmm}
   Add/remove yourself from the timed queue at hh:mm.
   For example: /1830
 
-- /add
+- /add, /heti, /kynäri
   Add/remove yourself from the instant queue.
 
 - /rm
   Remove yourself from all queues.
+
+- /ls, /count
+  Lists queues.
 ```";
 
 pub enum Command {
@@ -26,6 +32,9 @@ pub enum Command {
 
     /// Removes player from all queues.
     Rm,
+
+    /// Lists chat queues.
+    Ls,
 }
 
 impl Command {
@@ -38,9 +47,10 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
     let text = text.trim();
 
     let cmd = match text {
-        "/help" => Some(Command::Help),
-        "/add" => Some(Command::Add(None)),
+        "/help" | "/info" => Some(Command::Help),
+        "/add" | "/heti" | "/kynäri" => Some(Command::Add(None)),
         "/rm" => Some(Command::Rm),
+        "/ls" | "/count" => Some(Command::Ls),
         _ => {
             lazy_static! {
                 // Construct a regex that matches commands with four digits

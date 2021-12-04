@@ -64,3 +64,18 @@ pub fn mk_queue_status_msg(queue: &Queue, queue_id: &QueueId, op: &AddRemovePlay
         op, total_players, queue_size, queue_id, queue.add_cmd,
     )
 }
+
+pub fn mk_player_usernames_str(queue: &Queue, highlight: bool) -> String {
+    queue
+        .players
+        .values()
+        .map(|username| {
+            if highlight {
+                format!("@{}", username)
+            } else {
+                username.to_string()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(", ")
+}
