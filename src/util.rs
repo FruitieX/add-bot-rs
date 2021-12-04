@@ -1,5 +1,5 @@
 use crate::{
-    state::{Queue, QUEUE_SIZE},
+    state::{AddRemovePlayerOp, Queue, QUEUE_SIZE},
     types::{ChatId, QueueId, Username},
 };
 use chrono::NaiveTime;
@@ -55,12 +55,12 @@ pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str, markdown: bool) {
 }
 
 /// Constructs a status message describing current queue status.
-pub fn mk_queue_status_msg(queue: &Queue, queue_id: &QueueId) -> String {
+pub fn mk_queue_status_msg(queue: &Queue, queue_id: &QueueId, op: &AddRemovePlayerOp) -> String {
     let total_players = queue.players.len();
     let queue_size = QUEUE_SIZE;
 
     format!(
-        "{}/{} added to {} queue. Use {} to add/remove yourself from the queue!",
-        total_players, queue_size, queue_id, queue.add_cmd,
+        "{} queue. {}/{} in {} queue. Use {} to add/remove yourself from the queue!",
+        op, total_players, queue_size, queue_id, queue.add_cmd,
     )
 }

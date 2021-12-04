@@ -33,6 +33,22 @@ pub struct Chat {
     pub queues: HashMap<QueueId, Queue>,
 }
 
+pub enum AddRemovePlayerOp {
+    PlayerAdded,
+    PlayerRemoved,
+}
+
+impl std::fmt::Display for AddRemovePlayerOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            AddRemovePlayerOp::PlayerAdded => "Added to",
+            AddRemovePlayerOp::PlayerRemoved => "Removed from",
+        };
+
+        write!(f, "{}", s)
+    }
+}
+
 pub enum AddRemovePlayerResult {
     QueueEmpty(Queue),
     PlayerQueued(Queue),
@@ -66,7 +82,7 @@ impl State {
         add_cmd: String,
         timeout: NaiveTime,
         user: (UserId, Username),
-    ) -> (State, AddRemovePlayerResult) {
+    ) -> (State, AddRemovePlayerResult, AddRemovePlayerOp) {
         let mut state = self.clone();
 
         // Ensure both chat and queue exists in respective HashMaps.
@@ -76,6 +92,7 @@ impl State {
             .entry(queue_id.clone())
             .or_insert_with(|| Queue::new(timeout, add_cmd));
 
+        let mut op = AddRemovePlayerOp::PlayerAdded;
         if let Entry::Vacant(e) = queue.players.entry(user.0.clone()) {
             // Add the player and keep timeout up to date.
             e.insert(user.1);
@@ -83,6 +100,7 @@ impl State {
         } else {
             // Remove the player.
             queue.players.remove(&user.0);
+            op = AddRemovePlayerOp::PlayerRemoved;
         }
 
         let queue_player_count = queue.players.len();
@@ -101,7 +119,7 @@ impl State {
             _ => AddRemovePlayerResult::PlayerQueued(queue.clone()),
         };
 
-        (state, result)
+        (state, result, op)
     }
 
     /// Removes player from all chat queues.

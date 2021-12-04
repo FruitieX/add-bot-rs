@@ -1,6 +1,6 @@
 use crate::{
     command::Command,
-    state::AddRemovePlayerResult,
+    state::{AddRemovePlayerOp, AddRemovePlayerResult},
     state_container::StateContainer,
     types::{ChatId, QueueId, UserId},
     util::{fmt_naive_time, mk_queue_status_msg, mk_username, send_msg},
@@ -69,7 +69,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             };
 
             // Add player and update state.
-            let (state, result) =
+            let (state, result, op) =
                 state.add_remove_player(&chat_id, &queue_id, add_cmd, timeout, (user_id, username));
             sc.write(state.clone()).await;
 
@@ -77,7 +77,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             let text = match result {
                 AddRemovePlayerResult::PlayerQueued(queue)
                 | AddRemovePlayerResult::QueueEmpty(queue) => {
-                    mk_queue_status_msg(&queue, &queue_id)
+                    mk_queue_status_msg(&queue, &queue_id, &op)
                 }
                 AddRemovePlayerResult::QueueFull(queue) => {
                     let player_usernames = queue
@@ -105,7 +105,8 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             // Send queue status message for all affected queues.
             for (queue_id, queue) in affected_queues {
-                let text = mk_queue_status_msg(&queue, &queue_id);
+                let text =
+                    mk_queue_status_msg(&queue, &queue_id, &AddRemovePlayerOp::PlayerRemoved);
                 send_msg(&bot, &chat_id, &text, false).await
             }
         }
