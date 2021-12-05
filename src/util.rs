@@ -37,7 +37,8 @@ pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str, markdown: bool) {
     let chat_id: i64 = (*chat_id).into();
 
     let request = if markdown {
-        // Telegram wants me to escape these characters in this ParseMode.
+        // Telegram wants me to escape these (and probably some other)
+        // characters in this ParseMode.
         let text = text.replace("-", r"\-");
         let text = text.replace(".", r"\.");
 

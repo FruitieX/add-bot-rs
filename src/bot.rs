@@ -93,7 +93,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             send_msg(&bot, &chat_id, &text, false).await;
         }
 
-        Command::Rm => {
+        Command::Remove => {
             // Remove player and update state.
             let (state, affected_queues) = state.rm_player(&chat_id, &user_id);
             sc.write(state.clone()).await;
@@ -106,7 +106,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             }
         }
 
-        Command::Ls => {
+        Command::List => {
             let chat = state.chats.get(&chat_id);
             let queues = chat.map(|chat| chat.queues.clone());
 
