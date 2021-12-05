@@ -1,13 +1,13 @@
-use crate::types::{ChatId, QueueId, UserId, Username};
+use crate::types::{ChatId, QueueId, Username};
 use chrono::NaiveTime;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, HashSet};
 
 /// Contains the set of players who have added up to a queue, along with a
 /// timeout for when the queue expires.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Queue {
-    pub players: HashMap<UserId, Username>,
+    pub players: HashSet<Username>,
     pub timeout: NaiveTime,
     pub add_cmd: String,
 }
@@ -81,7 +81,7 @@ impl State {
         queue_id: &QueueId,
         add_cmd: String,
         timeout: NaiveTime,
-        user: (UserId, Username),
+        username: Username,
     ) -> (State, AddRemovePlayerResult, AddRemovePlayerOp) {
         let mut state = self.clone();
 
@@ -92,16 +92,15 @@ impl State {
             .entry(queue_id.clone())
             .or_insert_with(|| Queue::new(timeout, add_cmd));
 
-        let mut op = AddRemovePlayerOp::PlayerAdded;
-        if let Entry::Vacant(e) = queue.players.entry(user.0.clone()) {
-            // Add the player and keep timeout up to date.
-            e.insert(user.1);
-            queue.timeout = timeout;
+        let op = if queue.players.contains(&username) {
+            // Add the player
+            queue.players.insert(username);
+            AddRemovePlayerOp::PlayerAdded
         } else {
             // Remove the player.
-            queue.players.remove(&user.0);
-            op = AddRemovePlayerOp::PlayerRemoved;
-        }
+            queue.players.remove(&username);
+            AddRemovePlayerOp::PlayerRemoved
+        };
 
         let queue_player_count = queue.players.len();
 
@@ -128,7 +127,7 @@ impl State {
     pub fn rm_player(
         &self,
         chat_id: &ChatId,
-        user_id: &UserId,
+        username: &Username,
     ) -> (State, HashMap<QueueId, Queue>) {
         let mut state = self.clone();
 
@@ -143,9 +142,9 @@ impl State {
                 .iter_mut()
                 .map(|(queue_id, queue)| {
                     // Remove player from all chat queues
-                    let removed = queue.players.remove(user_id);
+                    let removed = queue.players.remove(username);
 
-                    if removed.is_some() {
+                    if removed {
                         affected_queues.insert(queue_id.clone(), queue.clone());
                     }
 

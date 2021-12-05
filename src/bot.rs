@@ -2,7 +2,7 @@ use crate::{
     command::Command,
     state::{AddRemovePlayerOp, AddRemovePlayerResult, QUEUE_SIZE},
     state_container::StateContainer,
-    types::{ChatId, QueueId, UserId},
+    types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_player_usernames_str, mk_queue_status_msg, mk_username, send_msg},
 };
 use chrono::Local;
@@ -43,13 +43,12 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
     let state = sc.read().await;
     let chat_id = ChatId::new(msg.chat.id);
     let user = msg.from()?;
-    let user_id = UserId::new(user.id);
 
     match cmd {
         Command::Help => send_msg(&bot, &chat_id, Command::descriptions(), true).await,
 
-        Command::Add(time) => {
-            let username = mk_username(user);
+        Command::AddRemove { time, for_user } => {
+            let username = for_user.unwrap_or_else(|| mk_username(user));
 
             // Construct queue_id, timeout and add_cmd based on whether command
             // targeted a timed queue or not.
@@ -70,7 +69,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             // Add player and update state.
             let (state, result, op) =
-                state.add_remove_player(&chat_id, &queue_id, add_cmd, timeout, (user_id, username));
+                state.add_remove_player(&chat_id, &queue_id, add_cmd, timeout, username);
             sc.write(state.clone()).await;
 
             // Construct message based on whether the queue is now full or not.
@@ -93,9 +92,11 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             send_msg(&bot, &chat_id, &text, false).await;
         }
 
-        Command::Remove => {
+        Command::RemoveAll => {
+            let username = mk_username(user);
+
             // Remove player and update state.
-            let (state, affected_queues) = state.rm_player(&chat_id, &user_id);
+            let (state, affected_queues) = state.rm_player(&chat_id, &username);
             sc.write(state.clone()).await;
 
             // Send queue status message for all affected queues.

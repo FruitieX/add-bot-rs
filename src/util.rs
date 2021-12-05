@@ -69,7 +69,7 @@ pub fn mk_queue_status_msg(queue: &Queue, queue_id: &QueueId, op: &AddRemovePlay
 pub fn mk_player_usernames_str(queue: &Queue, highlight: bool) -> String {
     queue
         .players
-        .values()
+        .iter()
         .map(|username| {
             if highlight {
                 format!("@{}", username)

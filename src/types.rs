@@ -37,15 +37,6 @@ impl From<ChatId> for i64 {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-pub struct UserId(i64);
-
-impl UserId {
-    pub fn new(id: i64) -> UserId {
-        UserId(id)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Username(String);
 
 impl Username {

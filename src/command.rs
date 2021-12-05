@@ -3,6 +3,8 @@ use chrono::NaiveTime;
 use lazy_static::lazy_static;
 use regex::Regex;
 
+use crate::types::Username;
+
 pub static HELP_TEXT: &str = "These commands are supported:
 
 ```
@@ -28,10 +30,13 @@ pub enum Command {
     Help,
 
     /// Add/remove player from instant queue or timed queue.
-    Add(Option<NaiveTime>),
+    AddRemove {
+        time: Option<NaiveTime>,
+        for_user: Option<Username>,
+    },
 
     /// Removes player from all queues.
-    Remove,
+    RemoveAll,
 
     /// Lists chat queues.
     List,
@@ -45,6 +50,7 @@ impl Command {
 
 struct CmdMatches {
     cmd: String,
+    #[allow(dead_code)]
     bot_name: Option<String>,
     args: Option<String>,
 }
@@ -60,7 +66,16 @@ fn get_cmd_matches(text: &str) -> Option<CmdMatches> {
 
     let cmd = caps.get(1)?.as_str().to_string();
     let bot_name = caps.get(2).map(|x| x.as_str().to_string());
-    let args = caps.get(3).map(|x| x.as_str().to_string());
+    let args = caps.get(3).and_then(|x| {
+        let s = x.as_str().trim().to_string();
+
+        // Convert empty strings to None values
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    });
 
     Some(CmdMatches {
         cmd,
@@ -80,34 +95,57 @@ fn matches_timed_queue(cmd: &str) -> bool {
     RE.is_match(cmd)
 }
 
+fn parse_time_arg(s: &str) -> Result<NaiveTime, chrono::ParseError> {
+    // Left pad with zeroes.
+    let timed_queue = format!("{:0>4}", s);
+
+    // Attempt parsing string as %H%M time.
+    NaiveTime::parse_from_str(&timed_queue, "%H%M")
+}
+
+fn parse_username_arg(s: String) -> Option<Username> {
+    lazy_static! {
+        // Construct a regex that matches `@username`.
+        static ref RE: Regex = Regex::new(r"^@(\S+)$").unwrap();
+    }
+
+    let caps = RE.captures(&s)?;
+    let username = caps.get(1)?.as_str();
+
+    Some(Username::new(username.to_string()))
+}
+
 pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Error + Send + Sync>> {
     let text = text.trim();
 
     let cmd_result = if let Some(cmd_matches) = get_cmd_matches(text) {
         // Message matched Telegram bot command regex, check if it's a command
         // we want to handle.
-        let CmdMatches {
-            cmd,
-            bot_name: _bot_name,
-            args: _args,
-        } = cmd_matches;
+        let CmdMatches { cmd, args, .. } = cmd_matches;
 
         match cmd.as_str() {
             "help" | "info" => Some(Command::Help),
-            "add" | "heti" | "kynär" | "kynäri" => Some(Command::Add(None)),
-            "rm" => Some(Command::Remove),
+            "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
+            "add" | "heti" | "kynär" | "kynäri" => {
+                let for_user = args.and_then(parse_username_arg);
+
+                Some(Command::AddRemove {
+                    time: None,
+                    for_user,
+                })
+            }
             _ => {
                 // Didn't match any of our normal commands, check for timed
                 // queue command match.
                 if matches_timed_queue(&cmd) {
-                    // Left pad with zeroes.
-                    let timed_queue = format!("{:0>4}", cmd);
+                    let parsed_time = parse_time_arg(&cmd)?;
+                    let for_user = args.and_then(parse_username_arg);
 
-                    // Attempt parsing string as %H%M time.
-                    let parsed_time = NaiveTime::parse_from_str(&timed_queue, "%H%M")?;
-
-                    Some(Command::Add(Some(parsed_time)))
+                    Some(Command::AddRemove {
+                        time: Some(parsed_time),
+                        for_user,
+                    })
                 } else {
                     None
                 }
