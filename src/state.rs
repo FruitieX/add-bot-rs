@@ -93,13 +93,13 @@ impl State {
             .or_insert_with(|| Queue::new(timeout, add_cmd));
 
         let op = if queue.players.contains(&username) {
-            // Add the player
-            queue.players.insert(username);
-            AddRemovePlayerOp::PlayerAdded
-        } else {
             // Remove the player.
             queue.players.remove(&username);
             AddRemovePlayerOp::PlayerRemoved
+        } else {
+            // Add the player
+            queue.players.insert(username);
+            AddRemovePlayerOp::PlayerAdded
         };
 
         let queue_player_count = queue.players.len();
