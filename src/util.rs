@@ -1,5 +1,5 @@
 use crate::{
-    state::{AddRemovePlayerOp, Queue, QUEUE_SIZE},
+    state::{AddRemovePlayerOp, Queue},
     types::{ChatId, QueueId, Username},
 };
 use chrono::NaiveTime;
@@ -57,26 +57,55 @@ pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str, markdown: bool) {
 
 /// Constructs a status message describing current queue status.
 pub fn mk_queue_status_msg(queue: &Queue, queue_id: &QueueId, op: &AddRemovePlayerOp) -> String {
-    let total_players = queue.players.len();
-    let queue_size = QUEUE_SIZE;
+    let players_str = mk_players_str(queue, false, false);
 
     format!(
-        "{} queue. {}/{} in {} queue. Use {} to add/remove yourself from the queue!",
-        op, total_players, queue_size, queue_id, queue.add_cmd,
+        "{} queue: {}.\n{}.\nUse {} to add/remove yourself from the queue!",
+        queue_id, op, players_str, queue.add_cmd,
     )
 }
 
-pub fn mk_player_usernames_str(queue: &Queue, highlight: bool) -> String {
-    queue
-        .players
-        .iter()
-        .map(|username| {
-            if highlight {
-                format!("@{}", username)
-            } else {
-                username.to_string()
-            }
-        })
-        .collect::<Vec<String>>()
-        .join(", ")
+/// Creates a string containing the list of players in queue.
+pub fn mk_players_str(queue: &Queue, highlight: bool, short: bool) -> String {
+    let (players, reserve) = queue.get_players();
+
+    let fmt_usernames = |usernames: Vec<Username>| {
+        usernames
+            .iter()
+            .map(|username| {
+                if highlight {
+                    format!("@{}", username)
+                } else {
+                    username.to_string()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(", ")
+    };
+
+    let player_count = format!("{}/{}", queue.num_players(), queue.size());
+
+    let players = fmt_usernames(players);
+    let players = if players.is_empty() {
+        String::from("no players")
+    } else {
+        players
+    };
+
+    let reserve = reserve.map(fmt_usernames);
+
+    let title = if short {
+        ""
+    } else {
+        "Players: "
+    };
+
+    if let Some(reserve) = reserve {
+        format!(
+            "{}{} ({}, Reserve: {})",
+            title, player_count, players, reserve
+        )
+    } else {
+        format!("{}{} ({})", title, player_count, players)
+    }
 }

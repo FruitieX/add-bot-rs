@@ -1,13 +1,16 @@
 use crate::types::{ChatId, QueueId, Username};
 use chrono::NaiveTime;
+use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+pub const QUEUE_SIZE: usize = 5;
 
 /// Contains the set of players who have added up to a queue, along with a
 /// timeout for when the queue expires.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Queue {
-    pub players: HashSet<Username>,
+    players: IndexSet<Username>,
     pub timeout: NaiveTime,
     pub add_cmd: String,
 }
@@ -20,12 +23,52 @@ impl Queue {
             add_cmd,
         }
     }
+
+    /// Return whether queue has players or not.
     pub fn has_players(&self) -> bool {
         !self.players.is_empty()
     }
-}
 
-pub const QUEUE_SIZE: usize = 5;
+    /// Return number of players in queue.
+    pub fn num_players(&self) -> usize {
+        self.players.len()
+    }
+
+    /// Return whether queue is full or not.
+    pub fn is_full(&self) -> bool {
+        self.players.len() >= QUEUE_SIZE
+    }
+
+    /// Returns lists of players split into players and reserve players.
+    pub fn get_players(&self) -> (Vec<Username>, Option<Vec<Username>>) {
+        if self.players.len() > QUEUE_SIZE {
+            // Split full queues into players and reserve players.
+            let mut players = self.players.clone();
+            let reserve = players.split_off(QUEUE_SIZE);
+            (
+                players.into_iter().collect(),
+                Some(reserve.into_iter().collect()),
+            )
+        } else {
+            (self.players.clone().into_iter().collect(), None)
+        }
+    }
+
+    /// Returns size of this queue.
+    pub fn size(&self) -> usize {
+        QUEUE_SIZE
+    }
+
+    /// Insert player by username.
+    pub fn insert_player(&mut self, username: Username) {
+        self.players.insert(username);
+    }
+
+    /// Remove player by username.
+    pub fn remove_player(&mut self, username: &Username) {
+        self.players.shift_remove(username);
+    }
+}
 
 /// A chat separates queues by Telegram groups.
 #[derive(Clone, Deserialize, Serialize, Default)]
@@ -34,15 +77,15 @@ pub struct Chat {
 }
 
 pub enum AddRemovePlayerOp {
-    PlayerAdded,
-    PlayerRemoved,
+    PlayerAdded(Username),
+    PlayerRemoved(Username),
 }
 
 impl std::fmt::Display for AddRemovePlayerOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            AddRemovePlayerOp::PlayerAdded => "Added to",
-            AddRemovePlayerOp::PlayerRemoved => "Removed from",
+            AddRemovePlayerOp::PlayerAdded(username) => format!("Added {}", username),
+            AddRemovePlayerOp::PlayerRemoved(username) => format!("Removed {}", username),
         };
 
         write!(f, "{}", s)
@@ -63,13 +106,13 @@ pub struct State {
 
 impl State {
     /// Removes a given chat queue.
-    pub fn rm_chat_queue(&self, chat_id: &ChatId, queue_id: &QueueId) -> State {
+    pub fn rm_chat_queue(&self, chat_id: &ChatId, queue_id: &QueueId) -> (State, Option<Queue>) {
         let mut state = self.clone();
 
         let chat = state.chats.get_mut(chat_id);
-        chat.map(|chat| chat.queues.remove(queue_id));
+        let queue = chat.and_then(|chat| chat.queues.remove(queue_id));
 
-        state
+        (state, queue)
     }
 
     /// Adds/removes player from given chat queue.
@@ -94,12 +137,12 @@ impl State {
 
         let op = if queue.players.contains(&username) {
             // Remove the player.
-            queue.players.remove(&username);
-            AddRemovePlayerOp::PlayerRemoved
+            queue.remove_player(&username);
+            AddRemovePlayerOp::PlayerRemoved(username)
         } else {
             // Add the player
-            queue.players.insert(username);
-            AddRemovePlayerOp::PlayerAdded
+            queue.insert_player(username.clone());
+            AddRemovePlayerOp::PlayerAdded(username)
         };
 
         let queue_player_count = queue.players.len();
@@ -111,9 +154,13 @@ impl State {
                 AddRemovePlayerResult::QueueEmpty(queue)
             }
             x if x >= QUEUE_SIZE => {
-                // Remove queue once it's full. Store removed queue in full_queue.
-                let queue = chat.queues.remove(queue_id).unwrap();
-                AddRemovePlayerResult::QueueFull(queue)
+                if queue_id.is_instant_queue() {
+                    // Remove instant queue once it's full.
+                    let queue = chat.queues.remove(queue_id).unwrap();
+                    AddRemovePlayerResult::QueueFull(queue)
+                } else {
+                    AddRemovePlayerResult::QueueFull(queue.clone())
+                }
             }
             _ => AddRemovePlayerResult::PlayerQueued(queue.clone()),
         };

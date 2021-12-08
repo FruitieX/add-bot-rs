@@ -8,14 +8,18 @@ impl QueueId {
         QueueId(id)
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub fn is_instant_queue(&self) -> bool {
         self.0.is_empty()
     }
 }
 
 impl std::fmt::Display for QueueId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = if self.is_empty() { "Instant" } else { &self.0 };
+        let s = if self.is_instant_queue() {
+            "Instant"
+        } else {
+            &self.0
+        };
 
         write!(f, "{}", s)
     }

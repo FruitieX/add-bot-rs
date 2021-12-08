@@ -1,14 +1,44 @@
 use crate::{
     command::Command,
-    state::{AddRemovePlayerOp, AddRemovePlayerResult, QUEUE_SIZE},
+    state::{AddRemovePlayerOp, AddRemovePlayerResult},
     state_container::StateContainer,
     types::{ChatId, QueueId},
-    util::{fmt_naive_time, mk_player_usernames_str, mk_queue_status_msg, mk_username, send_msg},
+    util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
 use chrono::Local;
 use teloxide::{prelude::*, Bot};
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 60;
+
+/// Called on timed out queues. Removes the chat queue and sends an
+/// informational Telegram message.
+async fn handle_queue_timeout(
+    sc: &StateContainer,
+    bot: &Bot,
+    chat_id: &ChatId,
+    queue_id: &QueueId,
+) -> Option<()> {
+    let state = sc.read().await;
+
+    // Remove chat queue and write new state.
+    let (state, removed_queue) = state.rm_chat_queue(chat_id, queue_id);
+    sc.write(state).await;
+
+    let removed_queue = removed_queue?;
+
+    // Inform players on Telegram about the timeout.
+    let text = if removed_queue.is_full() {
+        let players_str = mk_players_str(&removed_queue, true, false);
+        format!("{} queue: It's time to play!\n{}", queue_id, players_str)
+    } else {
+        let players_str = mk_players_str(&removed_queue, false, false);
+        format!("{} queue timed out!\n{}", queue_id, players_str)
+    };
+
+    send_msg(bot, chat_id, &text, false).await;
+
+    Some(())
+}
 
 /// Task that polls and takes action for any queues that have timed out.
 pub async fn poll_for_timeouts(sc: StateContainer, bot: Bot) {
@@ -22,13 +52,7 @@ pub async fn poll_for_timeouts(sc: StateContainer, bot: Bot) {
                 // Note that we compare only HH:MM timestamps here and poll
                 // every second, so we shouldn't miss any timeouts.
                 if t == fmt_naive_time(&queue.timeout) {
-                    // Remove chat queue and write new state.
-                    let state = state.rm_chat_queue(chat_id, queue_id);
-                    sc.write(state).await;
-
-                    // Inform players on Telegram about the timeout.
-                    let text = format!("{} queue timed out!", queue_id);
-                    send_msg(&bot, chat_id, &text, false).await
+                    handle_queue_timeout(&sc, &bot, chat_id, queue_id).await;
                 }
             }
         }
@@ -74,17 +98,14 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             // Construct message based on whether the queue is now full or not.
             let text = match result {
+                AddRemovePlayerResult::QueueFull(queue) if queue_id.is_instant_queue() => {
+                    let players_str = mk_players_str(&queue, true, false);
+                    format!("Match ready in {} queue! {}", queue_id, players_str)
+                }
                 AddRemovePlayerResult::PlayerQueued(queue)
+                | AddRemovePlayerResult::QueueFull(queue)
                 | AddRemovePlayerResult::QueueEmpty(queue) => {
                     mk_queue_status_msg(&queue, &queue_id, &op)
-                }
-                AddRemovePlayerResult::QueueFull(queue) => {
-                    let player_usernames = mk_player_usernames_str(&queue, true);
-
-                    format!(
-                        "Match ready in {} queue! Players: {}",
-                        queue_id, player_usernames
-                    )
                 }
             };
 
@@ -101,8 +122,11 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             // Send queue status message for all affected queues.
             for (queue_id, queue) in affected_queues {
-                let text =
-                    mk_queue_status_msg(&queue, &queue_id, &AddRemovePlayerOp::PlayerRemoved);
+                let text = mk_queue_status_msg(
+                    &queue,
+                    &queue_id,
+                    &AddRemovePlayerOp::PlayerRemoved(username.clone()),
+                );
                 send_msg(&bot, &chat_id, &text, false).await
             }
         }
@@ -116,17 +140,9 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                     let mut queue_strings: Vec<String> = queues
                         .iter()
                         .map(|(queue_id, queue)| {
-                            let total_players = queue.players.len();
-                            let queue_size = QUEUE_SIZE;
-                            let player_usernames = mk_player_usernames_str(queue, false);
-                            format!(
-                                "{} {}/{} ({}) {}",
-                                queue_id,
-                                total_players,
-                                queue_size,
-                                player_usernames,
-                                queue.add_cmd
-                            )
+                            let players_str = mk_players_str(queue, false, true);
+
+                            format!("{} {} {}", queue_id, players_str, queue.add_cmd)
                         })
                         .collect();
 
