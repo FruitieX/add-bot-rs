@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use crate::{
     command::Command,
-    state::{AddRemovePlayerOp, AddRemovePlayerResult},
+    state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue},
     state_container::StateContainer,
     types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
@@ -60,6 +62,21 @@ pub async fn poll_for_timeouts(sc: StateContainer, bot: Bot) {
         // Poll again after 1 second.
         tokio::time::sleep(std::time::Duration::from_secs(1)).await
     }
+}
+
+/// Takes the queues and returns sorted human-readable strings with queue details.
+fn make_queue_strings(queues: HashMap<QueueId, Queue>) -> Vec<String> {
+    let mut queue_strings: Vec<String> = queues
+        .iter()
+        .map(|(queue_id, queue)| {
+            let players_str = mk_players_str(queue, false, true);
+
+            format!("{} {} {}", queue_id, players_str, queue.add_cmd)
+        })
+        .collect();
+
+    queue_strings.sort();
+    queue_strings
 }
 
 /// Handler for parsed incoming Telegram commands.
@@ -135,18 +152,16 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             let chat = state.chats.get(&chat_id);
             let queues = chat.map(|chat| chat.queues.clone());
 
+            let current_time = Local::now().time();
+
             let text = match queues {
                 Some(queues) if !queues.is_empty() => {
-                    let mut queue_strings: Vec<String> = queues
-                        .iter()
-                        .map(|(queue_id, queue)| {
-                            let players_str = mk_players_str(queue, false, true);
+                    let (queues_today, queues_tomorrow): (HashMap<QueueId, Queue>, HashMap<QueueId, Queue>) = queues
+                        .into_iter()
+                        .partition(|(_, queue)| queue.timeout > current_time);
 
-                            format!("{} {} {}", queue_id, players_str, queue.add_cmd)
-                        })
-                        .collect();
-
-                    queue_strings.sort();
+                    let mut queue_strings = make_queue_strings(queues_today);
+                    queue_strings.append(&mut make_queue_strings(queues_tomorrow));
 
                     queue_strings.join("\n")
                 }
