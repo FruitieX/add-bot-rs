@@ -106,7 +106,7 @@ fn parse_time_arg(s: &str) -> Result<NaiveTime, chrono::ParseError> {
 fn parse_username_arg(s: String) -> Option<Username> {
     lazy_static! {
         // Construct a regex that matches `@username`.
-        static ref RE: Regex = Regex::new(r"^@(\S+)$").unwrap();
+        static ref RE: Regex = Regex::new(r"^@(\w{5,32})$").unwrap();
     }
 
     let caps = RE.captures(&s)?;
