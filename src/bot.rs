@@ -156,7 +156,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             let text = match queues {
                 Some(queues) if !queues.is_empty() => {
-                    let (queues_today, queues_tomorrow): (HashMap<QueueId, Queue>, HashMap<QueueId, Queue>) = queues
+                    let (queues_today, queues_tomorrow) = queues
                         .into_iter()
                         .partition(|(_, queue)| queue.timeout > current_time);
 
