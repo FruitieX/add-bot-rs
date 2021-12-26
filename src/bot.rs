@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
 
 use crate::{
     command::Command,
@@ -64,19 +64,17 @@ pub async fn poll_for_timeouts(sc: StateContainer, bot: Bot) {
     }
 }
 
-/// Takes the queues and returns sorted human-readable strings with queue details.
-fn make_queue_strings(queues: HashMap<QueueId, Queue>) -> Vec<String> {
-    let mut queue_strings: Vec<String> = queues
+/// Takes a sorted list of queues and returns human-readable strings with queue
+/// details.
+fn make_queue_strings(queues: Vec<(QueueId, Queue)>) -> Vec<String> {
+    queues
         .iter()
         .map(|(queue_id, queue)| {
             let players_str = mk_players_str(queue, false, true);
 
             format!("{} {} {}", queue_id, players_str, queue.add_cmd)
         })
-        .collect();
-
-    queue_strings.sort();
-    queue_strings
+        .collect()
 }
 
 /// Handler for parsed incoming Telegram commands.
@@ -152,18 +150,25 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             let chat = state.chats.get(&chat_id);
             let queues = chat.map(|chat| chat.queues.clone());
 
-            let current_time = Local::now().time();
-
             let text = match queues {
                 Some(queues) if !queues.is_empty() => {
-                    let (queues_today, queues_tomorrow) = queues
-                        .into_iter()
-                        .partition(|(_, queue)| queue.timeout > current_time);
+                    let current_time = Local::now().time();
 
-                    let mut queue_strings = make_queue_strings(queues_today);
-                    queue_strings.append(&mut make_queue_strings(queues_tomorrow));
+                    let mut queues: Vec<(QueueId, Queue)> = queues.into_iter().collect();
+                    queues.sort_by(|(_, a), (_, b)| {
+                        let a_next_day = a.timeout < current_time;
+                        let b_next_day = b.timeout < current_time;
 
-                    queue_strings.join("\n")
+                        if a_next_day == b_next_day {
+                            a.timeout.cmp(&b.timeout)
+                        } else if a_next_day {
+                            Ordering::Greater
+                        } else /* if b_next_day */ {
+                            Ordering::Less
+                        }
+                    });
+
+                    make_queue_strings(queues).join("\n")
                 }
                 _ => String::from("No active queues."),
             };
