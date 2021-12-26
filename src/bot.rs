@@ -7,7 +7,7 @@ use crate::{
     types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use teloxide::{prelude::*, Bot};
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
@@ -171,6 +171,23 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                     make_queue_strings(queues).join("\n")
                 }
                 _ => String::from("No active queues."),
+            };
+
+            send_msg(&bot, &chat_id, &text, false).await
+        }
+
+        Command::Tj => {
+            let current_date = Local::now().date().naive_local();
+
+            let start = NaiveDate::parse_from_str("03.01.2022", "%d.%m.%Y").unwrap();
+            let end = NaiveDate::parse_from_str("15.12.2022", "%d.%m.%Y").unwrap();
+
+            let text = if current_date < start {
+                let d = start - current_date;
+                format!("Tänään jäljellä {} aamua palveluksen alkamiseen", d.num_days())
+            } else {
+                let d = current_date - end;
+                format!("Tänään jäljellä {} aamua", d.num_days())
             };
 
             send_msg(&bot, &chat_id, &text, false).await
