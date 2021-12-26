@@ -10,7 +10,7 @@ use crate::{
 use chrono::Local;
 use teloxide::{prelude::*, Bot};
 
-static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 60;
+static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
 
 /// Called on timed out queues. Removes the chat queue and sends an
 /// informational Telegram message.
