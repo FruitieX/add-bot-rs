@@ -7,7 +7,8 @@ use crate::{
     types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
-use chrono::{Local, NaiveDate};
+use chrono::{Date, DateTime, Duration, Local, NaiveDate, Utc};
+use circadia::{time_of_event, GlobalPosition, SunEvent};
 use teloxide::{prelude::*, Bot};
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
@@ -75,6 +76,43 @@ fn make_queue_strings(queues: Vec<(QueueId, Queue)>) -> Vec<String> {
             format!("{} {} {}", queue_id, players_str, queue.add_cmd)
         })
         .collect()
+}
+
+/// Used to distinguish the relevant reference point for calculation.
+#[derive(Debug, PartialEq)]
+enum Mornings {
+    Start(i64),
+    End(i64),
+    Disabled,
+}
+/// Return total amount of mornings left.
+fn calculate_mornings(current_datetime_utc: DateTime<Utc>) -> Mornings {
+    let today = current_datetime_utc.naive_local().date();
+    let start = NaiveDate::from_ymd(2022, 1, 3);
+    let end = NaiveDate::from_ymd(2022, 12, 15);
+
+    let early_morning = {
+        let pos = GlobalPosition::at(59.98, 23.41);
+        let sunrise_date_utc = Date::<Utc>::from_utc(today, Utc);
+        let sunrise_datetime_today =
+            time_of_event(sunrise_date_utc, &pos, SunEvent::SUNRISE).unwrap();
+
+        // Check if the sunrise hasn't happened yet, add one morning if not
+        if current_datetime_utc < sunrise_datetime_today {
+            Duration::days(1)
+        } else {
+            Duration::zero()
+        }
+    };
+    if today < start || today == start && early_morning == Duration::days(1) {
+        let d = start - today + early_morning;
+        Mornings::Start(d.num_days())
+    } else if today <= end {
+        let d = end - today + early_morning;
+        Mornings::End(d.num_days())
+    } else {
+        Mornings::Disabled
+    }
 }
 
 /// Handler for parsed incoming Telegram commands.
@@ -163,7 +201,9 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                             a.timeout.cmp(&b.timeout)
                         } else if a_next_day {
                             Ordering::Greater
-                        } else /* if b_next_day */ {
+                        } else
+                        /* if b_next_day */
+                        {
                             Ordering::Less
                         }
                     });
@@ -177,17 +217,16 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
         }
 
         Command::Tj => {
-            let current_date = Local::now().date().naive_local();
-
-            let start = NaiveDate::parse_from_str("03.01.2022", "%d.%m.%Y").unwrap();
-            let end = NaiveDate::parse_from_str("15.12.2022", "%d.%m.%Y").unwrap();
-
-            let text = if current_date < start {
-                let d = start - current_date;
-                format!("Tänään jäljellä {} aamua palveluksen alkamiseen", d.num_days())
-            } else {
-                let d = current_date - end;
-                format!("Tänään jäljellä {} aamua", d.num_days())
+            let current_datetime_utc = Utc::now();
+            let mornings = calculate_mornings(current_datetime_utc);
+            let text = match mornings {
+                Mornings::Start(num_days) => {
+                    format!("Tänään jäljellä {} aamua palveluksen alkamiseen", num_days)
+                }
+                Mornings::End(num_days) => {
+                    format!("Tänään jäljellä {} aamua", num_days)
+                }
+                Mornings::Disabled => return None,
             };
 
             send_msg(&bot, &chat_id, &text, false).await
@@ -195,4 +234,53 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
     }
 
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+
+    #[test]
+    fn test_mornings() {
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-02T12:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-03T00:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-03T12:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::End(346));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-04T00:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::End(346));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-04T12:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-12-15T00:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::End(1));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-12-15T12:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::End(0));
+
+        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-12-16T12:00:00+02:00")
+            .unwrap()
+            .into();
+        assert_eq!(calculate_mornings(datetime), Mornings::Disabled);
+    }
 }

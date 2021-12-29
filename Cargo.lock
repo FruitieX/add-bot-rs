@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "circadia",
  "indexmap",
  "lazy_static",
  "log",
@@ -122,6 +123,15 @@ dependencies = [
  "serde",
  "time",
  "winapi",
+]
+
+[[package]]
+name = "circadia"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4943f6ba8fbe8da0f01e98940ea7e656652c4ccfbd5f39bcb0e76af43f8f8b79"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]
