@@ -130,7 +130,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "tj" | "aamuja" | "hajo" => Some(Command::Tj),
+            "tj" | "mornings" | "aamuja" | "hajo" | "dägä" | "dagar" | "daegae" | "morgnar" => Some(Command::Tj),
             "add" | "heti" | "kynär" | "kynäri" => {
                 let for_user = args.and_then(parse_username_arg);
 

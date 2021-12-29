@@ -201,9 +201,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                             a.timeout.cmp(&b.timeout)
                         } else if a_next_day {
                             Ordering::Greater
-                        } else
-                        /* if b_next_day */
-                        {
+                        } else {
                             Ordering::Less
                         }
                     });
