@@ -7,7 +7,8 @@ use crate::{
     types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
-use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use chrono_tz::{Europe::Helsinki, Tz};
 use teloxide::{prelude::*, Bot};
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
@@ -85,16 +86,15 @@ enum Mornings {
     Disabled,
 }
 /// Return total amount of mornings left.
-fn calculate_mornings(current_datetime: NaiveDateTime) -> Mornings {
+fn calculate_mornings(current_datetime: DateTime<Tz>) -> Mornings {
     let today = current_datetime.date();
-    let start = NaiveDate::from_ymd(2022, 1, 3);
-    let end = NaiveDate::from_ymd(2022, 12, 15);
+    let start = Helsinki.ymd(2022, 1, 3);
+    let end = Helsinki.ymd(2022, 12, 15);
 
     let early_morning = {
-        let current_time = current_datetime.time();
-        let sleepy_time = NaiveTime::from_hms(4, 0, 0);
+        let sleepy_time = today.and_hms(4, 0, 0);
         // Check if the morning has not started yet
-        if current_time < sleepy_time {
+        if current_datetime < sleepy_time {
             Duration::days(1)
         } else {
             Duration::zero()
@@ -211,7 +211,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
         }
 
         Command::Tj => {
-            let current_datetime = Local::now().naive_local();
+            let current_datetime = Utc::now().with_timezone(&Helsinki);
             let mornings = calculate_mornings(current_datetime);
             let text = match mornings {
                 Mornings::Start(num_days) => {
@@ -237,28 +237,40 @@ mod tests {
 
     #[test]
     fn test_mornings() {
-        let datetime = NaiveDate::from_ymd(2022, 1, 2).and_hms(12, 0, 0);
+        let datetime = Helsinki.ymd(2022, 1, 2).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
 
-        let datetime = NaiveDate::from_ymd(2022, 1, 3).and_hms(0, 0, 0);
+        let datetime = Helsinki.ymd(2022, 1, 3).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
 
-        let datetime = NaiveDate::from_ymd(2022, 1, 3).and_hms(12, 0, 0);
+        let datetime = Helsinki.ymd(2022, 1, 3).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(346));
 
-        let datetime = NaiveDate::from_ymd(2022, 1, 4).and_hms(0, 0, 0);
+        let datetime = Helsinki.ymd(2022, 1, 4).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(346));
 
-        let datetime = NaiveDate::from_ymd(2022, 1, 4).and_hms(12, 0, 0);
+        let datetime = Helsinki.ymd(2022, 1, 4).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(345));
 
-        let datetime = NaiveDate::from_ymd(2022, 12, 15).and_hms(0, 0, 0);
+        let datetime = Helsinki.ymd(2022, 1, 4).and_hms(23, 0, 0);
+        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+
+        let datetime = Helsinki.ymd(2022, 1, 5).and_hms(1, 0, 0);
+        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+
+        let datetime = Helsinki.ymd(2022, 1, 5).and_hms(3, 0, 0);
+        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+
+        let datetime = Helsinki.ymd(2022, 1, 5).and_hms(5, 0, 0);
+        assert_eq!(calculate_mornings(datetime), Mornings::End(344));
+
+        let datetime = Helsinki.ymd(2022, 12, 15).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(1));
 
-        let datetime = NaiveDate::from_ymd(2022, 12, 15).and_hms(12, 0, 0);
+        let datetime = Helsinki.ymd(2022, 12, 15).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(0));
 
-        let datetime = NaiveDate::from_ymd(2022, 12, 16).and_hms(0, 0, 0);
+        let datetime = Helsinki.ymd(2022, 12, 16).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::Disabled);
     }
 }
