@@ -86,7 +86,10 @@ enum Mornings {
     Disabled,
 }
 /// Return total amount of mornings left.
-fn calculate_mornings(current_datetime: DateTime<Tz>) -> Mornings {
+fn calculate_mornings(current_datetime: DateTime<Tz>) -> Option<Mornings> {
+    if current_datetime.timezone() != Helsinki {
+        return None;
+    }
     let today = current_datetime.date();
     let start = Helsinki.ymd(2022, 1, 3);
     let end = Helsinki.ymd(2022, 12, 15);
@@ -102,12 +105,12 @@ fn calculate_mornings(current_datetime: DateTime<Tz>) -> Mornings {
     };
     if today < start || today == start && early_morning == Duration::days(1) {
         let d = start - today + early_morning;
-        Mornings::Start(d.num_days())
+        Some(Mornings::Start(d.num_days()))
     } else if today <= end {
         let d = end - today + early_morning;
-        Mornings::End(d.num_days())
+        Some(Mornings::End(d.num_days()))
     } else {
-        Mornings::Disabled
+        Some(Mornings::Disabled)
     }
 }
 
@@ -212,7 +215,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
         Command::Tj => {
             let current_datetime = Utc::now().with_timezone(&Helsinki);
-            let mornings = calculate_mornings(current_datetime);
+            let mornings = calculate_mornings(current_datetime).unwrap();
             let text = match mornings {
                 Mornings::Start(num_days) => {
                     format!("Tänään jäljellä {} aamua palveluksen alkamiseen", num_days)
@@ -238,39 +241,39 @@ mod tests {
     #[test]
     fn test_mornings() {
         let datetime = Helsinki.ymd(2022, 1, 2).and_hms(12, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::Start(1)));
 
         let datetime = Helsinki.ymd(2022, 1, 3).and_hms(0, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::Start(1)));
 
         let datetime = Helsinki.ymd(2022, 1, 3).and_hms(12, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(346));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(346)));
 
         let datetime = Helsinki.ymd(2022, 1, 4).and_hms(0, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(346));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(346)));
 
         let datetime = Helsinki.ymd(2022, 1, 4).and_hms(12, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(345)));
 
         let datetime = Helsinki.ymd(2022, 1, 4).and_hms(23, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(345)));
 
         let datetime = Helsinki.ymd(2022, 1, 5).and_hms(1, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(345)));
 
         let datetime = Helsinki.ymd(2022, 1, 5).and_hms(3, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(345));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(345)));
 
         let datetime = Helsinki.ymd(2022, 1, 5).and_hms(5, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(344));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(344)));
 
         let datetime = Helsinki.ymd(2022, 12, 15).and_hms(0, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(1));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(1)));
 
         let datetime = Helsinki.ymd(2022, 12, 15).and_hms(12, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::End(0));
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::End(0)));
 
         let datetime = Helsinki.ymd(2022, 12, 16).and_hms(0, 0, 0);
-        assert_eq!(calculate_mornings(datetime), Mornings::Disabled);
+        assert_eq!(calculate_mornings(datetime), Some(Mornings::Disabled));
     }
 }
