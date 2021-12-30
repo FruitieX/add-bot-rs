@@ -7,8 +7,7 @@ use crate::{
     types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
-use chrono::{Date, DateTime, Duration, Local, NaiveDate, Utc};
-use circadia::{time_of_event, GlobalPosition, SunEvent};
+use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use teloxide::{prelude::*, Bot};
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
@@ -86,19 +85,16 @@ enum Mornings {
     Disabled,
 }
 /// Return total amount of mornings left.
-fn calculate_mornings(current_datetime_utc: DateTime<Utc>) -> Mornings {
-    let today = current_datetime_utc.naive_local().date();
+fn calculate_mornings(current_datetime: NaiveDateTime) -> Mornings {
+    let today = current_datetime.date();
     let start = NaiveDate::from_ymd(2022, 1, 3);
     let end = NaiveDate::from_ymd(2022, 12, 15);
 
     let early_morning = {
-        let pos = GlobalPosition::at(59.98, 23.41);
-        let sunrise_date_utc = Date::<Utc>::from_utc(today, Utc);
-        let sunrise_datetime_today =
-            time_of_event(sunrise_date_utc, &pos, SunEvent::SUNRISE).unwrap();
-
-        // Check if the sunrise hasn't happened yet, add one morning if not
-        if current_datetime_utc < sunrise_datetime_today {
+        let current_time = current_datetime.time();
+        let sleepy_time = NaiveTime::from_hms(4, 0, 0);
+        // Check if the morning has not started yet
+        if current_time < sleepy_time {
             Duration::days(1)
         } else {
             Duration::zero()
@@ -215,8 +211,8 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
         }
 
         Command::Tj => {
-            let current_datetime_utc = Utc::now();
-            let mornings = calculate_mornings(current_datetime_utc);
+            let current_datetime = Local::now().naive_local();
+            let mornings = calculate_mornings(current_datetime);
             let text = match mornings {
                 Mornings::Start(num_days) => {
                     format!("Tänään jäljellä {} aamua palveluksen alkamiseen", num_days)
@@ -241,44 +237,28 @@ mod tests {
 
     #[test]
     fn test_mornings() {
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-02T12:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 1, 2).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-03T00:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 1, 3).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::Start(1));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-03T12:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 1, 3).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(346));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-04T00:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 1, 4).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(346));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-01-04T12:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 1, 4).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(345));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-12-15T00:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 12, 15).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(1));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-12-15T12:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 12, 15).and_hms(12, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::End(0));
 
-        let datetime: DateTime<Utc> = DateTime::parse_from_rfc3339("2022-12-16T12:00:00+02:00")
-            .unwrap()
-            .into();
+        let datetime = NaiveDate::from_ymd(2022, 12, 16).and_hms(0, 0, 0);
         assert_eq!(calculate_mornings(datetime), Mornings::Disabled);
     }
 }

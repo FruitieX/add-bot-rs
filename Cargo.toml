@@ -18,4 +18,3 @@ chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 lazy_static = "1.4.0"
 indexmap = { version = "1.7.0", features = ["serde"] }
-circadia = "0.0.2"
