@@ -98,6 +98,14 @@ fn matches_timed_queue(cmd: &str) -> bool {
     RE.is_match(cmd)
 }
 
+fn matches_tj_regex(cmd: &str) -> bool {
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"^hajo+$").unwrap();
+    }
+
+    RE.is_match(cmd)
+}
+
 fn parse_time_arg(s: &str) -> Result<NaiveTime, chrono::ParseError> {
     // Left pad with zeroes.
     let timed_queue = format!("{:0>4}", s);
@@ -130,7 +138,9 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "tj" | "mornings" | "aamuja" | "hajo" | "dägä" | "dagar" | "daegae" | "morgnar" => Some(Command::Tj),
+            "tj" | "mornings" | "aamuja" | "dägä" | "dagar" | "daegae" | "morgnar" => {
+                Some(Command::Tj)
+            }
             "add" | "heti" | "kynär" | "kynäri" => {
                 let for_user = args.and_then(parse_username_arg);
 
@@ -140,9 +150,12 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                 })
             }
             _ => {
+                if matches_tj_regex(&cmd) {
+                    Some(Command::Tj)
+                }
                 // Didn't match any of our normal commands, check for timed
                 // queue command match.
-                if matches_timed_queue(&cmd) {
+                else if matches_timed_queue(&cmd) {
                     let parsed_time = parse_time_arg(&cmd)?;
                     let for_user = args.and_then(parse_username_arg);
 
