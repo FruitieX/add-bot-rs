@@ -229,6 +229,21 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             send_msg(&bot, &chat_id, &text, false).await
         }
+
+        Command::Pokemon => {
+            let current_datetime = Utc::now().with_timezone(&Helsinki);
+            let mornings = calculate_mornings(current_datetime).unwrap();
+
+            let text = match mornings {
+                Mornings::End(num_days, _) => format!(
+                    "https://raw.githubusercontent.com/HybridShivam/Pokemon/master/assets/images/{:03}.png",
+                    num_days
+                ),
+                Mornings::Disabled => return None,
+            };
+
+            send_msg(&bot, &chat_id, &text, false).await
+        }
     }
 
     Some(())
