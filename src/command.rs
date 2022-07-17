@@ -43,6 +43,9 @@ pub enum Command {
 
     /// Tänään jäljellä
     Tj,
+
+    /// Shows an image of the Pokemon that matches the current TJ
+    Pokemon,
 }
 
 impl Command {
@@ -149,6 +152,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                     for_user,
                 })
             }
+            "pokemon" => Some(Command::Pokemon),
             _ => {
                 if matches_tj_regex(&cmd) {
                     Some(Command::Tj)
