@@ -132,20 +132,13 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
             // Construct queue_id, timeout and add_cmd based on whether command
             // targeted a timed queue or not.
             let (queue_id, timeout, add_cmd) = match time {
-                // Catch current minute commands and redirect to instant queue
-                Some(time) if time == t_now => {
-                    let queue_id = QueueId::new(String::from(""));
-                    let timeout = Local::now().time()
-                        + chrono::Duration::minutes(INSTANT_QUEUE_TIMEOUT_MINUTES);
-                    let add_cmd = String::from("/add");
-                    (queue_id, timeout, add_cmd)
-                }
-                Some(time) => {
+                Some(time) if time != t_now => {
                     let queue_id = QueueId::new(fmt_naive_time(&time));
                     let add_cmd = time.format("/%H%M").to_string();
                     (queue_id, time, add_cmd)
                 }
-                None => {
+                // Catch current or missing minute commands and redirect to instant queue
+                _ => {
                     let queue_id = QueueId::new(String::from(""));
                     let timeout = Local::now().time()
                         + chrono::Duration::minutes(INSTANT_QUEUE_TIMEOUT_MINUTES);
