@@ -7,7 +7,7 @@ use crate::{
     types::{ChatId, QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
-use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc, NaiveTime, Timelike};
 use chrono_tz::{Europe::Helsinki, Tz};
 use teloxide::{prelude::*, Bot};
 
@@ -127,10 +127,19 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
         Command::AddRemove { time, for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(user));
-
+            // Current time without seconds
+            let t_now = NaiveTime::from_hms(Local::now().time().hour(),Local::now().time().minute(),0);
             // Construct queue_id, timeout and add_cmd based on whether command
             // targeted a timed queue or not.
             let (queue_id, timeout, add_cmd) = match time {
+                // Catch current minute commands and redirect to instant queue
+                Some(time) if time == t_now => {
+                    let queue_id = QueueId::new(String::from(""));
+                    let timeout = Local::now().time()
+                        + chrono::Duration::minutes(INSTANT_QUEUE_TIMEOUT_MINUTES);
+                    let add_cmd = String::from("/add");
+                    (queue_id, timeout, add_cmd)
+                }
                 Some(time) => {
                     let queue_id = QueueId::new(fmt_naive_time(&time));
                     let add_cmd = time.format("/%H%M").to_string();
