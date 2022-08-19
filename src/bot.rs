@@ -238,13 +238,13 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             let text = match mornings {
                 Mornings::End(num_days, _) => format!(
-                    "https://raw.githubusercontent.com/HybridShivam/Pokemon/master/assets/images/{:03}.png",
-                    num_days
+                    "[{}](https://raw.githubusercontent.com/HybridShivam/Pokemon/master/assets/images/{:03}.png)",
+                    num_days, num_days
                 ),
                 Mornings::Disabled => return None,
             };
 
-            send_msg(&bot, &chat_id, &text, false).await
+            send_msg(&bot, &chat_id, &text, true).await
         }
     }
 
