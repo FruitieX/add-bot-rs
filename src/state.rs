@@ -1,8 +1,9 @@
-use crate::types::{ChatId, QueueId, Username};
+use crate::types::{QueueId, Username};
 use chrono::NaiveTime;
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use teloxide::types::ChatId;
 
 pub const QUEUE_SIZE: usize = 5;
 

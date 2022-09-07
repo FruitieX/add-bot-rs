@@ -25,21 +25,6 @@ impl std::fmt::Display for QueueId {
     }
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-pub struct ChatId(i64);
-
-impl ChatId {
-    pub fn new(id: i64) -> ChatId {
-        ChatId(id)
-    }
-}
-
-impl From<ChatId> for i64 {
-    fn from(id: ChatId) -> Self {
-        id.0
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct Username(String);
 

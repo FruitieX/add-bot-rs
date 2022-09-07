@@ -1,6 +1,6 @@
 use crate::state_container::StateContainer;
 use anyhow::Result;
-use teloxide::Bot;
+use teloxide::{Bot, types::Message};
 
 mod bot;
 mod command;
@@ -15,26 +15,24 @@ async fn main() -> Result<()> {
     let sc = StateContainer::try_read_from_file().await?;
 
     // Initialize the Telegram bot API.
-    teloxide::enable_logging!();
+    pretty_env_logger::init();
     let bot = Bot::from_env();
 
     // Spawn a new task that polls for queues that have timed out.
     tokio::spawn(bot::poll_for_timeouts(sc.clone(), bot.clone()));
 
     // Start polling for Telegram messages.
-    teloxide::repl(bot.clone(), move |cx| {
-        let bot = bot.clone();
+    teloxide::repl(bot.clone(), move |message: Message, bot: Bot| {
         let sc = sc.clone();
         async move {
-            let msg = cx.update;
-            let msg_text = msg.text();
+            let msg_text = message.text();
 
             // Only attempt parsing message if there's any message text.
             if let Some(msg_text) = msg_text {
                 let cmd = command::parse_cmd(msg_text)?;
 
                 if let Some(cmd) = cmd {
-                    bot::handle_cmd(sc, bot, msg, cmd).await;
+                    bot::handle_cmd(sc, bot, message, cmd).await;
                 }
             }
 

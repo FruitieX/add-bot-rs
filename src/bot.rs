@@ -4,7 +4,7 @@ use crate::{
     command::Command,
     state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue},
     state_container::StateContainer,
-    types::{ChatId, QueueId},
+    types::{QueueId},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
 use chrono::{DateTime, Duration, Local, TimeZone, Utc, NaiveTime, Timelike};
@@ -119,7 +119,7 @@ fn calculate_mornings(current_datetime: DateTime<Tz>) -> Option<Mornings> {
 /// Handler for parsed incoming Telegram commands.
 pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command) -> Option<()> {
     let state = sc.read().await;
-    let chat_id = ChatId::new(msg.chat.id);
+    let chat_id = msg.chat.id;
     let user = msg.from()?;
 
     match cmd {
@@ -225,7 +225,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                     "Tänään jäljellä {} aamua ({:.2}\u{00a0}% suoritettu)",
                     num_days, percentage
                 )
-                .replacen(".", ",", 1),
+                .replacen('.', ",", 1),
                 Mornings::Disabled => return None,
             };
 
