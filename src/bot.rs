@@ -4,10 +4,10 @@ use crate::{
     command::Command,
     state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue},
     state_container::StateContainer,
-    types::{QueueId},
+    types::QueueId,
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, mk_username, send_msg},
 };
-use chrono::{DateTime, Duration, Local, TimeZone, Utc, NaiveTime, Timelike};
+use chrono::{DateTime, Duration, NaiveTime, TimeZone, Timelike, Utc};
 use chrono_tz::{Europe::Helsinki, Tz};
 use teloxide::{prelude::*, Bot};
 
@@ -44,10 +44,10 @@ async fn handle_queue_timeout(
 }
 
 /// Task that polls and takes action for any queues that have timed out.
-pub async fn poll_for_timeouts(sc: StateContainer, bot: Bot) {
+pub async fn poll_for_timeouts(sc: StateContainer, tz: Tz, bot: Bot) {
     loop {
         let state = sc.read().await;
-        let t = fmt_naive_time(&Local::now().time());
+        let t = fmt_naive_time(&Utc::now().with_timezone(&tz).time());
 
         // Traverse all chat queues and look for timed out queues.
         for (chat_id, chat) in &state.chats {
@@ -117,7 +117,13 @@ fn calculate_mornings(current_datetime: DateTime<Tz>) -> Option<Mornings> {
 }
 
 /// Handler for parsed incoming Telegram commands.
-pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command) -> Option<()> {
+pub async fn handle_cmd(
+    sc: StateContainer,
+    tz: Tz,
+    bot: Bot,
+    msg: Message,
+    cmd: Command,
+) -> Option<()> {
     let state = sc.read().await;
     let chat_id = msg.chat.id;
     let user = msg.from()?;
@@ -128,7 +134,11 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
         Command::AddRemove { time, for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(user));
             // Current time without seconds
-            let t_now = NaiveTime::from_hms(Local::now().time().hour(),Local::now().time().minute(),0);
+            let t_now = NaiveTime::from_hms(
+                Utc::now().with_timezone(&tz).time().hour(),
+                Utc::now().with_timezone(&tz).time().minute(),
+                0,
+            );
             // Construct queue_id, timeout and add_cmd based on whether command
             // targeted a timed queue or not.
             let (queue_id, timeout, add_cmd) = match time {
@@ -140,7 +150,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
                 // Catch current or missing minute commands and redirect to instant queue
                 _ => {
                     let queue_id = QueueId::new(String::from(""));
-                    let timeout = Local::now().time()
+                    let timeout = Utc::now().with_timezone(&tz).time()
                         + chrono::Duration::minutes(INSTANT_QUEUE_TIMEOUT_MINUTES);
                     let add_cmd = String::from("/add");
                     (queue_id, timeout, add_cmd)
@@ -193,7 +203,7 @@ pub async fn handle_cmd(sc: StateContainer, bot: Bot, msg: Message, cmd: Command
 
             let text = match queues {
                 Some(queues) if !queues.is_empty() => {
-                    let current_time = Local::now().time();
+                    let current_time = Utc::now().with_timezone(&tz).time();
 
                     let mut queues: Vec<(QueueId, Queue)> = queues.into_iter().collect();
                     queues.sort_by(|(_, a), (_, b)| {
