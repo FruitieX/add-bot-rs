@@ -3,7 +3,7 @@ WORKDIR /usr/src/add-bot
 COPY . .
 RUN cargo install --path .
 
-FROM debian:bullseye-slim
+FROM debian:bullseye-slim@sha256:f4da3f9b18fc242b739807a0fb3e77747f644f2fb3f67f4403fafce2286b431a
 RUN apt-get update && apt-get install -y ca-certificates openssl && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/cargo/bin/add-bot /usr/local/bin/add-bot
 CMD ["add-bot"]
