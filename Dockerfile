@@ -1,4 +1,4 @@
-FROM rust:1.68 AS builder
+FROM rust:1.69@sha256:ee5de9877e3df1180a2a95193ea954afcaac9c23d5dc3404cb987be5f2e432f8 AS builder
 WORKDIR /usr/src/add-bot
 COPY . .
 RUN cargo install --path .
