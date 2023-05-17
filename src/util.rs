@@ -6,7 +6,7 @@ use chrono::NaiveTime;
 use teloxide::{
     payloads::SendMessageSetters,
     prelude::{Request, Requester},
-    types::{ParseMode, User, ChatId},
+    types::{ChatId, ParseMode, User},
     Bot,
 };
 
@@ -92,11 +92,7 @@ pub fn mk_players_str(queue: &Queue, highlight: bool, short: bool) -> String {
 
     let reserve = reserve.map(fmt_usernames);
 
-    let title = if short {
-        ""
-    } else {
-        "Players: "
-    };
+    let title = if short { "" } else { "Players: " };
 
     if let Some(reserve) = reserve {
         format!(
