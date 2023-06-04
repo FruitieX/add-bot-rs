@@ -1,4 +1,4 @@
-FROM rust:1.70@sha256:79e811f25051df6f9fe20e24ffd8102b366d2d38dd0f4eec2bef7ddb84b23f5f AS builder
+FROM rust:1.70@sha256:cf5513bb19a7a59fd271db14b4e71ed5d91df95c4cb1f431ac131231f2e6104a AS builder
 WORKDIR /usr/src/add-bot
 COPY . .
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse CARGO_TERM_COLOR=always
