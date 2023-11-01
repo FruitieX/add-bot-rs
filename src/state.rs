@@ -130,7 +130,7 @@ impl State {
         let mut state = self.clone();
 
         // Ensure both chat and queue exists in respective HashMaps.
-        let chat = state.chats.entry(*chat_id).or_insert_with(Chat::default);
+        let chat = state.chats.entry(*chat_id).or_default();
         let queue = chat
             .queues
             .entry(queue_id.clone())
