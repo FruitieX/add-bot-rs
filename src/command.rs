@@ -8,20 +8,20 @@ use crate::types::Username;
 pub static HELP_TEXT: &str = "These commands are supported:
 
 ```
-- /help, /info
+- /help
   Displays this help text.
 
 - /{hhmm}
   Add/remove yourself from the timed queue at hh:mm.
   For example: /1830
 
-- /add, /heti, /kynäri
+- /add
   Add/remove yourself from the instant queue.
 
 - /rm
   Remove yourself from all queues.
 
-- /ls, /count
+- /ls
   Lists queues.
 ```";
 
@@ -40,12 +40,6 @@ pub enum Command {
 
     /// Lists chat queues.
     List,
-
-    /// Tänään jäljellä
-    Tj,
-
-    /// Shows an image of the Pokemon that matches the current TJ
-    Pokemon,
 }
 
 impl Command {
@@ -101,14 +95,6 @@ fn matches_timed_queue(cmd: &str) -> bool {
     RE.is_match(cmd)
 }
 
-fn matches_tj_regex(cmd: &str) -> bool {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"^hajo+$").unwrap();
-    }
-
-    RE.is_match(cmd)
-}
-
 fn parse_time_arg(s: &str) -> Result<NaiveTime, chrono::ParseError> {
     // Left pad with zeroes.
     let timed_queue = format!("{:0>4}", s);
@@ -141,9 +127,6 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "tj" | "mornings" | "aamuja" | "dägä" | "dagar" | "daegae" | "morgnar" => {
-                Some(Command::Tj)
-            }
             "add" | "heti" | "kynär" | "kynäri" => {
                 let for_user = args.and_then(parse_username_arg);
 
@@ -152,14 +135,10 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                     for_user,
                 })
             }
-            "pokemon" => Some(Command::Pokemon),
             _ => {
-                if matches_tj_regex(&cmd) {
-                    Some(Command::Tj)
-                }
                 // Didn't match any of our normal commands, check for timed
                 // queue command match.
-                else if matches_timed_queue(&cmd) {
+                if matches_timed_queue(&cmd) {
                     let parsed_time = parse_time_arg(&cmd)?;
                     let for_user = args.and_then(parse_username_arg);
 
