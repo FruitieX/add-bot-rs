@@ -91,7 +91,8 @@ pub async fn handle_cmd(
     let user = msg.from()?;
 
     match cmd {
-        Command::Help => send_msg(&bot, &chat_id, Command::descriptions(), true).await,
+        Command::Help => send_msg(&bot, &chat_id, Command::help(), true).await,
+        Command::Version => send_msg(&bot, &chat_id, &Command::version(), true).await,
 
         Command::AddRemove { time, for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(user));

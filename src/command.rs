@@ -5,6 +5,7 @@ use regex::Regex;
 
 use crate::types::Username;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub static HELP_TEXT: &str = "These commands are supported:
 
 ```
@@ -29,6 +30,9 @@ pub enum Command {
     /// Display help text for supported commands.
     Help,
 
+    /// Display bot version
+    Version,
+
     /// Add/remove player from instant queue or timed queue.
     AddRemove {
         time: Option<NaiveTime>,
@@ -43,8 +47,12 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn descriptions() -> &'static str {
+    pub fn help() -> &'static str {
         HELP_TEXT
+    }
+
+    pub fn version() -> String {
+        format!("add-bot v{}", VERSION)
     }
 }
 
@@ -125,6 +133,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
 
         match cmd.as_str() {
             "help" | "info" => Some(Command::Help),
+            "version" | "v" => Some(Command::Version),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
             "add" | "heti" | "kynär" | "kynäri" => {
