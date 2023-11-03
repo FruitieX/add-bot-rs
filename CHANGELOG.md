@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/FruitieX/add-bot-rs/compare/v0.2.1...v0.2.2) (2023-11-03)
+
+
+### Bug Fixes
+
+* target musl when building container image ([951f5e3](https://github.com/FruitieX/add-bot-rs/commit/951f5e398ab3551768e42dc08926bd139ded41ec))
+
 ## [0.2.1](https://github.com/FruitieX/add-bot-rs/compare/v0.2.0...v0.2.1) (2023-11-02)
 
 
