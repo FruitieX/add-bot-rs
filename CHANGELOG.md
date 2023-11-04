@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/FruitieX/add-bot-rs/compare/v0.2.2...v0.3.0) (2023-11-03)
+
+
+### Features
+
+* version command ([5c4be80](https://github.com/FruitieX/add-bot-rs/commit/5c4be80454bf9cd89ce8ccaa5929e389566455a4))
+
 ## [0.2.2](https://github.com/FruitieX/add-bot-rs/compare/v0.2.1...v0.2.2) (2023-11-03)
 
 
