@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/FruitieX/add-bot-rs/compare/v0.3.0...v0.3.1) (2023-11-30)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate clap to v4.4.10 ([e8baf22](https://github.com/FruitieX/add-bot-rs/commit/e8baf22d929f1b43527f0d2bbd01c2f9eb001ac7))
+* **deps:** update rust crate clap to v4.4.8 ([bc616ce](https://github.com/FruitieX/add-bot-rs/commit/bc616cef15ad73e7c84ebb8017df6991ec4752e5))
+* **deps:** update rust crate clap to v4.4.9 ([df1faff](https://github.com/FruitieX/add-bot-rs/commit/df1faffc83d840413008c8fcf2e54b513870f724))
+* **deps:** update rust crate serde to v1.0.192 ([4c48922](https://github.com/FruitieX/add-bot-rs/commit/4c48922ba117e413760c517cf50f6cd9f58333f3))
+* **deps:** update rust crate serde to v1.0.193 ([08437d1](https://github.com/FruitieX/add-bot-rs/commit/08437d1bf77b8ed4e7d93a8d85d95eb72d410e9c))
+* **deps:** update rust crate tokio to v1.34.0 ([048fd0f](https://github.com/FruitieX/add-bot-rs/commit/048fd0f7739e1842f64b3259516ef18fbe9669e3))
+
 ## [0.3.0](https://github.com/FruitieX/add-bot-rs/compare/v0.2.2...v0.3.0) (2023-11-03)
 
 

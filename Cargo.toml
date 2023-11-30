@@ -1,6 +1,6 @@
 [package]
 name = "add-bot"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Rasmus Lövegren <fruitiex@gmail.com>"]
 edition = "2021"
 
