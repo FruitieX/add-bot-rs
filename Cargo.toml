@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 teloxide = { version = "=0.12.2", features = ["ctrlc_handler", "macros", "auto-send", "rustls"], default-features = false }
+config = "=0.13.4"
 log = "=0.4.20"
 pretty_env_logger = "=0.5.0"
 tokio = { version =  "=1.35.1", features = ["rt-multi-thread", "macros", "fs"] }
@@ -20,3 +21,5 @@ regex = "=1.10.2"
 lazy_static = "=1.4.0"
 indexmap = { version = "=2.1.0", features = ["serde"] }
 clap = { version = "=4.4.12", features = ["derive"] }
+cached = { version = "0.46.1", features = ["default", "async", "async_tokio_rt_multi_thread"] }
+reqwest = { version = "0.11.23", default-features = false, features = ["tokio-rustls", "rustls", "rustls-tls"] }

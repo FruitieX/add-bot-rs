@@ -2,10 +2,12 @@ use crate::state_container::StateContainer;
 use anyhow::Result;
 use chrono_tz::Tz;
 use clap::Parser;
-use teloxide::{types::Message, Bot};
+use teloxide::{types::Message, utils::client_from_env, Bot};
 
 mod bot;
 mod command;
+mod leetify;
+mod settings;
 mod state;
 mod state_container;
 mod types;
@@ -20,6 +22,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let settings = settings::read_settings()?;
+
     // Try restoring state from file, or default to empty state.
     let sc = StateContainer::try_read_from_file().await?;
 
@@ -28,13 +32,14 @@ async fn main() -> Result<()> {
 
     // Initialize the Telegram bot API.
     pretty_env_logger::init();
-    let bot = Bot::from_env();
+    let bot = Bot::with_client(&settings.teloxide.bot_api_token, client_from_env());
 
     // Spawn a new task that polls for queues that have timed out.
     tokio::spawn(bot::poll_for_timeouts(sc.clone(), tz, bot.clone()));
 
     // Start polling for Telegram messages.
     teloxide::repl(bot.clone(), move |message: Message, bot: Bot| {
+        let settings = settings.clone();
         let sc = sc.clone();
 
         async move {
@@ -45,7 +50,7 @@ async fn main() -> Result<()> {
                 let cmd = command::parse_cmd(msg_text);
 
                 if let Ok(Some(cmd)) = cmd {
-                    bot::handle_cmd(sc, tz, bot, message, cmd).await;
+                    bot::handle_cmd(settings, sc, tz, bot, message, cmd).await;
                 }
             }
 

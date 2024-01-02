@@ -44,6 +44,18 @@ pub enum Command {
 
     /// Lists chat queues.
     List,
+
+    /// Leetify stats for user
+    Stats { for_user: Option<Username> },
+
+    /// Last played stats from Leetify
+    LastPlayed { for_user: Option<Username> },
+
+    /// Last played sorted by ascending date
+    HallOfShame,
+
+    /// Playres sorted by skill level
+    HallOfFame,
 }
 
 impl Command {
@@ -136,6 +148,18 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "version" | "v" => Some(Command::Version),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
+            "stats" => {
+                let for_user = args.and_then(parse_username_arg);
+
+                Some(Command::Stats { for_user })
+            }
+            "hallofshame" => Some(Command::HallOfShame),
+            "halloffame" | "top" | "top10" | "ranks" | "premier" => Some(Command::HallOfFame),
+            "lastplayed" => {
+                let for_user = args.and_then(parse_username_arg);
+
+                Some(Command::LastPlayed { for_user })
+            }
             "add" | "heti" | "kynär" | "kynäri" => {
                 let for_user = args.and_then(parse_username_arg);
 

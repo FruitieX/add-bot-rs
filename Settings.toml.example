@@ -1,0 +1,8 @@
+[teloxide]
+bot_api_token = "<telegram bot API token here>"
+
+# Telegram nickname -> steamID64 (Dec) mappings
+[players.steamid_mappings]
+"tg_nick1" = "76561191234567891"
+"tg_nick2" = "76561191234567892"
+"tg_nick3" = "76561191234567893"

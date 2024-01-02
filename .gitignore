@@ -1,3 +1,4 @@
 /target
 /.telegram-bot-token
 /state.json
+/Settings.toml
