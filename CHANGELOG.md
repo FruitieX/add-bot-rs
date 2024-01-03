@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/FruitieX/add-bot-rs/compare/v0.4.0...v0.5.0) (2024-01-03)
+
+
+### Features
+
+* improved statistics ([afe3a1e](https://github.com/FruitieX/add-bot-rs/commit/afe3a1ea8e257b04c75b57b758a40f9f5fe58ca6))
+
+
+### Bug Fixes
+
+* **deps:** pin dependencies ([a55bf5c](https://github.com/FruitieX/add-bot-rs/commit/a55bf5ca79ecbd77c3660ebd7b8275f38d613cef))
+* **deps:** update rust crate cached to v0.47.0 ([4c53b8f](https://github.com/FruitieX/add-bot-rs/commit/4c53b8fce3767dfd5675a02d29d88a09c71bf896))
+* improve help text, add some cmd aliases ([b0bdc2b](https://github.com/FruitieX/add-bot-rs/commit/b0bdc2b3821a9d8dcb1123f3e727560c74915308))
+* re-enable markdown for help command ([fd04e87](https://github.com/FruitieX/add-bot-rs/commit/fd04e87a2bb8922ef7df25172e710530dfbb40d7))
+
 ## [0.4.0](https://github.com/FruitieX/add-bot-rs/compare/v0.3.0...v0.4.0) (2024-01-02)
 
 
