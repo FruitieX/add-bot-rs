@@ -3,25 +3,28 @@ use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::{settings::Settings, types::Username};
+use crate::{
+    settings::Settings,
+    types::{SteamID, Username},
+};
 
 #[cached(result = true, time = 3600, sync_writes = true)]
-pub async fn get_leetify_stats(steam_id: String) -> Result<serde_json::Value> {
+pub async fn get_leetify_stats(steam_id: SteamID) -> Result<serde_json::Value> {
     let url = format!("https://api.leetify.com/api/profile/{steam_id}");
     let resp = reqwest::get(&url).await?.json().await?;
     Ok(resp)
 }
 
-pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<String> {
+pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<SteamID> {
     let steamid_mappings = settings.players.steamid_mappings;
-    let steamid = steamid_mappings.get(&username.to_string());
+    let steamid = steamid_mappings.get(username);
     steamid.cloned()
 }
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LeetifyGame {
-    pub own_team_steam64_ids: Vec<String>,
+    pub own_team_steam64_ids: Vec<SteamID>,
     pub game_finished_at: DateTime<Utc>,
     pub map_name: String,
     pub match_result: String,
@@ -31,7 +34,7 @@ pub struct LeetifyGame {
 
 pub fn last_played_from_leetify_stats(
     settings: &Settings,
-    own_steam_id: &String,
+    own_steam_id: &SteamID,
     resp: &serde_json::Value,
 ) -> Result<LeetifyGame> {
     let games_field = resp
@@ -39,7 +42,7 @@ pub fn last_played_from_leetify_stats(
         .context("Could not find any games in Leetify response")?;
     let games = serde_json::from_value::<Vec<LeetifyGame>>(games_field.clone())?;
 
-    let team_steam_ids: Vec<&String> = settings
+    let team_steam_ids: Vec<&SteamID> = settings
         .players
         .steamid_mappings
         .values()
@@ -106,7 +109,7 @@ pub async fn player_stats(settings: &Settings, username: &Username) -> Result<Le
 }
 
 pub struct HallOfShameEntry {
-    pub username: String,
+    pub username: Username,
     pub last_played: DateTime<Utc>,
 }
 
@@ -149,7 +152,7 @@ pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>>
 }
 
 pub struct HallOfFameEntry {
-    pub username: String,
+    pub username: Username,
     pub last_played: DateTime<Utc>,
     pub skill_level: u32,
 }

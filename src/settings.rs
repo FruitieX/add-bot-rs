@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::types::{SteamID, Username};
+
 #[derive(Clone, Deserialize, Debug)]
 pub struct TeloxideSettings {
     pub bot_api_token: String,
@@ -9,7 +11,7 @@ pub struct TeloxideSettings {
 
 #[derive(Clone, Deserialize, Debug)]
 pub struct PlayersSettings {
-    pub steamid_mappings: HashMap<String, String>,
+    pub steamid_mappings: HashMap<Username, SteamID>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
