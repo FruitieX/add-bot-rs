@@ -25,6 +25,8 @@ pub async fn handle_cmd(
     let chat_id = msg.chat.id;
     let user = msg.from()?;
 
+    let markdown = matches!(cmd, Command::Help);
+
     let text = match cmd {
         Command::Help => Command::help(),
         Command::AddRemove { time, for_user } => {
@@ -48,7 +50,7 @@ pub async fn handle_cmd(
         Command::HallOfFame => hall_of_fame(&settings).await,
     };
 
-    send_msg(&bot, &chat_id, &text, false).await;
+    send_msg(&bot, &chat_id, &text, markdown).await;
 
     Some(())
 }
