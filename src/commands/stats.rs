@@ -17,7 +17,8 @@ pub async fn hall_of_fame(settings: &Settings) -> String {
 
     match res {
         Ok(hall_of_fame) => {
-            let avg_skill_level = hall_of_fame.avg_skill_level;
+            let avg = hall_of_fame.avg_skill_level;
+            let median = hall_of_fame.median_skill_level;
             let list = hall_of_fame
                 .entries
                 .iter()
@@ -34,7 +35,7 @@ pub async fn hall_of_fame(settings: &Settings) -> String {
                 .join("\n");
 
             format!(
-                "Hall of fame, or top 10 premier ranks:\n{list}\nAvg rating: {avg_skill_level:.0}"
+                "Hall of fame, or top 10 premier ranks:\n\n{list}\n\nAvg: {avg:.0}, Median: {median}"
             )
         }
         Err(e) => {
@@ -68,7 +69,22 @@ pub async fn hall_of_shame(settings: &Settings, tz: &Tz) -> String {
                 .collect::<Vec<String>>()
                 .join("\n");
 
-            format!("Hall of shame, or longest time since last played with team:\n{list}")
+            let days_since_last_played: Vec<i64> = entries
+                .iter()
+                .map(|entry| {
+                    (Utc::now().date_naive() - entry.last_played.with_timezone(tz).date_naive())
+                        .num_days()
+                })
+                .collect();
+
+            let avg =
+                days_since_last_played.iter().sum::<i64>() / days_since_last_played.len() as i64;
+
+            let median = days_since_last_played
+                .get(days_since_last_played.len() / 2)
+                .unwrap_or(&0);
+
+            format!("Hall of shame, or longest time since last played with team:\n\n{list}\n\nAvg: {avg:.0} days, Median: {median:.0} days",)
         }
         Err(e) => {
             eprintln!("Failed to fetch stats from Leetify: {}", e);
@@ -124,8 +140,12 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
             let t_leetify = fmt_leetify_stat(stats.t_leetify);
 
             let leetify = format!("{leetify} (CT: {ct_leetify} / T: {t_leetify})",);
+            let skill_level = stats
+                .skill_level
+                .map(|r| r.to_string())
+                .unwrap_or("N/A".to_string());
 
-            let text = format!("Stats for {username} from last 30 matches:\n- Leetify rating: {leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}");
+            let text = format!("Stats for {username} from last 30 matches:\n- Leetify rating: {leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}");
             text
         }
         Err(e) => {

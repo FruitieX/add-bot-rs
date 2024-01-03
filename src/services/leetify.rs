@@ -10,6 +10,7 @@ use crate::{
 
 #[cached(result = true, time = 3600, sync_writes = true)]
 pub async fn get_leetify_stats(steam_id: SteamID) -> Result<serde_json::Value> {
+    println!("Fetching Leetify stats for SteamID {steam_id}");
     let url = format!("https://api.leetify.com/api/profile/{steam_id}");
     let resp = reqwest::get(&url).await?.json().await?;
     Ok(resp)
@@ -90,6 +91,7 @@ pub struct LeetifyStats {
     pub leetify: f32,
     pub opening: f32,
     pub t_leetify: f32,
+    pub skill_level: Option<u32>,
 }
 
 pub async fn player_stats(settings: &Settings, username: &Username) -> Result<LeetifyStats> {
@@ -103,7 +105,12 @@ pub async fn player_stats(settings: &Settings, username: &Username) -> Result<Le
     let stats_value = resp
         .get("recentGameRatings")
         .context("No recent Leetify stats found")?;
-    let stats = serde_json::from_value::<LeetifyStats>(stats_value.clone())?;
+    let mut stats = serde_json::from_value::<LeetifyStats>(stats_value.clone())?;
+    let game = last_played_from_leetify_stats(settings, &steamid, &resp);
+
+    if let Ok(game) = game {
+        stats.skill_level = game.skill_level;
+    }
 
     Ok(stats)
 }
@@ -117,7 +124,6 @@ pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>>
     let mut entries = vec![];
 
     for (username, steamid) in settings.players.steamid_mappings.iter() {
-        println!("Fetching Leetify stats for player {username}");
         let resp = get_leetify_stats(steamid.clone()).await;
 
         let Ok(resp) = resp else {
@@ -160,6 +166,7 @@ pub struct HallOfFameEntry {
 pub struct HallOfFame {
     pub entries: Vec<HallOfFameEntry>,
     pub avg_skill_level: f32,
+    pub median_skill_level: u32,
 }
 
 /// List top 10 players based on their skill level in their most recent game
@@ -167,7 +174,6 @@ pub async fn hall_of_fame(settings: &Settings) -> Result<HallOfFame> {
     let mut entries = vec![];
 
     for (username, steamid) in settings.players.steamid_mappings.iter() {
-        println!("Fetching Leetify stats for player {username}");
         let resp = get_leetify_stats(steamid.clone()).await;
 
         let Ok(resp) = resp else {
@@ -197,14 +203,23 @@ pub async fn hall_of_fame(settings: &Settings) -> Result<HallOfFame> {
         }
     }
 
+    // Don't include players with no rank or old CSGO premier rank
+    entries.retain(|entry| entry.skill_level > 1000);
+
     entries.sort_by_key(|entry| entry.skill_level);
     entries.reverse();
 
     let avg_skill_level =
         entries.iter().map(|entry| entry.skill_level).sum::<u32>() as f32 / entries.len() as f32;
 
+    let median_skill_level = entries
+        .get(entries.len() / 2)
+        .map(|entry| entry.skill_level)
+        .unwrap_or(0);
+
     Ok(HallOfFame {
         avg_skill_level,
+        median_skill_level,
         entries,
     })
 }
