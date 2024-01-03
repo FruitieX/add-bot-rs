@@ -34,6 +34,10 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
                 .collect::<Vec<String>>()
                 .join("\n");
 
+            if hall_of_fame.entries.is_empty() {
+                return format!("No entries found for {rank_type}. ☹️",);
+            }
+
             format!(
                 "Hall of fame, or top 10 {rank_type} ranks:\n\n{list}\n\nAvg: {avg:.0}, Median: {median}"
             )
@@ -52,11 +56,10 @@ pub async fn hall_of_shame(settings: &Settings, tz: &Tz) -> String {
         Ok(entries) => {
             let list = entries
                 .iter()
-                .take(10)
                 .enumerate()
                 .map(|(index, entry)| {
                     let t = entry.last_played.with_timezone(&tz.clone());
-                    let t = t.format("%Y-%m-%d %H:%M:%S");
+                    let t = t.format("%Y-%m-%d");
                     let days_ago = (Utc::now().with_timezone(tz).date_naive()
                         - entry.last_played.with_timezone(tz).date_naive())
                     .num_days();
@@ -80,11 +83,7 @@ pub async fn hall_of_shame(settings: &Settings, tz: &Tz) -> String {
             let avg =
                 days_since_last_played.iter().sum::<i64>() / days_since_last_played.len() as i64;
 
-            let median = days_since_last_played
-                .get(days_since_last_played.len() / 2)
-                .unwrap_or(&0);
-
-            format!("Hall of shame, or longest time since last played with team:\n\n{list}\n\nAvg: {avg:.0} days, Median: {median:.0} days",)
+            format!("Hall of shame, or longest time since last played with team:\n\n{list}\n\nAvg: {avg:.0} days",)
         }
         Err(e) => {
             eprintln!("Failed to fetch stats from Leetify: {}", e);
