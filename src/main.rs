@@ -6,7 +6,8 @@ use teloxide::{types::Message, utils::client_from_env, Bot};
 
 mod bot;
 mod command;
-mod leetify;
+mod commands;
+mod services;
 mod settings;
 mod state;
 mod state_container;
@@ -35,7 +36,7 @@ async fn main() -> Result<()> {
     let bot = Bot::with_client(&settings.teloxide.bot_api_token, client_from_env());
 
     // Spawn a new task that polls for queues that have timed out.
-    tokio::spawn(bot::poll_for_timeouts(sc.clone(), tz, bot.clone()));
+    tokio::spawn(commands::queue::poll_for_timeouts(sc.clone(), tz, bot.clone()));
 
     // Start polling for Telegram messages.
     teloxide::repl(bot.clone(), move |message: Message, bot: Bot| {
