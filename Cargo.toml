@@ -23,4 +23,4 @@ indexmap = { version = "=2.1.0", features = ["serde"] }
 clap = { version = "=4.4.12", features = ["derive"] }
 cached = { version = "=0.47.0", features = ["default", "async", "async_tokio_rt_multi_thread"] }
 reqwest = { version = "=0.11.23", default-features = false, features = ["tokio-rustls", "rustls", "rustls-tls"] }
-futures = "0.3.30"
+futures = "=0.3.30"
