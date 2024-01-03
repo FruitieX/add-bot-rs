@@ -50,7 +50,7 @@ pub enum Command {
     HallOfShame,
 
     /// Top 10 players by skill level
-    HallOfFame,
+    HallOfFame { rank_type: String },
 }
 
 impl Command {
@@ -145,8 +145,45 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             }
             "hallofshame" | "wallofshame" | "shame" => Some(Command::HallOfShame),
             "halloffame" | "walloffame" | "fame" | "top" | "top10" | "ranks" | "premier" => {
-                Some(Command::HallOfFame)
+                Some(Command::HallOfFame {
+                    rank_type: "premier".to_string(),
+                })
             }
+
+            "cs_office" | "office" => Some(Command::HallOfFame {
+                rank_type: "cs_office".to_string(),
+            }),
+            "de_mirage" | "mirage" => Some(Command::HallOfFame {
+                rank_type: "de_mirage".to_string(),
+            }),
+            "de_overpass" | "overpass" => Some(Command::HallOfFame {
+                rank_type: "de_overpass".to_string(),
+            }),
+            "de_inferno" | "inferno" => Some(Command::HallOfFame {
+                rank_type: "de_inferno".to_string(),
+            }),
+            "de_nuke" | "nuke" => Some(Command::HallOfFame {
+                rank_type: "de_nuke".to_string(),
+            }),
+            "de_train" | "train" => Some(Command::HallOfFame {
+                rank_type: "de_train".to_string(),
+            }),
+            "de_vertigo" | "vertigo" => Some(Command::HallOfFame {
+                rank_type: "de_vertigo".to_string(),
+            }),
+            "de_dust2" | "dust2" => Some(Command::HallOfFame {
+                rank_type: "de_dust2".to_string(),
+            }),
+            "de_cache" | "cache" => Some(Command::HallOfFame {
+                rank_type: "de_cache".to_string(),
+            }),
+            "de_ancient" | "ancient" => Some(Command::HallOfFame {
+                rank_type: "de_ancient".to_string(),
+            }),
+            "de_anubis" | "anubis" => Some(Command::HallOfFame {
+                rank_type: "de_anubis".to_string(),
+            }),
+
             "lastplayed" => {
                 let for_user = args.and_then(parse_username_arg);
 

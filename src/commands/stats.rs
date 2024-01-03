@@ -12,8 +12,8 @@ fn index_to_pos(index: usize) -> String {
     }
 }
 
-pub async fn hall_of_fame(settings: &Settings) -> String {
-    let res = services::leetify::hall_of_fame(settings).await;
+pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
+    let res = services::leetify::hall_of_fame(settings, &rank_type).await;
 
     match res {
         Ok(hall_of_fame) => {
@@ -35,7 +35,7 @@ pub async fn hall_of_fame(settings: &Settings) -> String {
                 .join("\n");
 
             format!(
-                "Hall of fame, or top 10 premier ranks:\n\n{list}\n\nAvg: {avg:.0}, Median: {median}"
+                "Hall of fame, or top 10 {rank_type} ranks:\n\n{list}\n\nAvg: {avg:.0}, Median: {median}"
             )
         }
         Err(e) => {

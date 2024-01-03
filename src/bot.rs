@@ -47,7 +47,7 @@ pub async fn handle_cmd(
             last_played(&settings, &tz, username).await
         }
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,
-        Command::HallOfFame => hall_of_fame(&settings).await,
+        Command::HallOfFame { rank_type } => hall_of_fame(&settings, rank_type).await,
     };
 
     send_msg(&bot, &chat_id, &text, markdown).await;

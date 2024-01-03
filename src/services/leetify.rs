@@ -182,12 +182,14 @@ pub struct HallOfFame {
 }
 
 /// List top 10 players based on their skill level in their most recent game
-pub async fn hall_of_fame(settings: &Settings) -> Result<HallOfFame> {
+pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<HallOfFame> {
     let steamid_mappings = settings.players.steamid_mappings.clone();
 
     let tasks: Vec<_> = steamid_mappings
         .into_iter()
         .map(|(username, steamid)| {
+            let rank_type = rank_type.clone();
+
             tokio::spawn(async move {
                 let resp = get_leetify_mini_profile(steamid.clone()).await;
 
@@ -203,11 +205,11 @@ pub async fn hall_of_fame(settings: &Settings) -> Result<HallOfFame> {
                 let premier_rank = resp
                     .ranks
                     .iter()
-                    .find(|r| r.r#type.as_deref() == Some("premier"));
+                    .find(|r| r.r#type.as_ref() == Some(&rank_type));
                 let skill_level = premier_rank.and_then(|r| r.skill_level);
 
                 let Some(skill_level) = skill_level else {
-                    eprintln!("Failed to find premier rank for player {username}");
+                    eprintln!("Failed to find {rank_type} rank for player {username}");
 
                     return None;
                 };
@@ -224,8 +226,13 @@ pub async fn hall_of_fame(settings: &Settings) -> Result<HallOfFame> {
 
     let mut entries: Vec<HallOfFameEntry> = tasks_results.into_iter().flatten().flatten().collect();
 
-    // Don't include players with no rank or old CSGO premier rank
-    entries.retain(|entry| entry.skill_level > 1000);
+    // Don't include players with no rank
+    entries.retain(|entry| entry.skill_level != 0);
+
+    if rank_type == "premier" {
+        // Don't include players with old CSGO premier rank
+        entries.retain(|entry| entry.skill_level > 1000);
+    }
 
     entries.sort_by_key(|entry| entry.skill_level);
     entries.reverse();
