@@ -16,6 +16,14 @@ pub async fn get_leetify_stats(steam_id: SteamID) -> Result<serde_json::Value> {
     Ok(resp)
 }
 
+#[cached(result = true, time = 60)]
+pub async fn get_leetify_mini_profile(steam_id: SteamID) -> Result<LeetifyMiniProfile> {
+    println!("Fetching Leetify mini profile for SteamID {steam_id}");
+    let url = format!("https://api.leetify.com/api/mini-profiles/{steam_id}");
+    let resp: LeetifyMiniProfile = reqwest::get(&url).await?.json().await?;
+    Ok(resp)
+}
+
 pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<SteamID> {
     let steamid_mappings = settings.players.steamid_mappings;
     let steamid = steamid_mappings.get(username);
@@ -78,7 +86,7 @@ pub async fn last_played(settings: &Settings, username: &Username) -> Result<Lee
     Ok(game)
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LeetifyStats {
     pub aim: f32,
@@ -94,25 +102,29 @@ pub struct LeetifyStats {
     pub skill_level: Option<u32>,
 }
 
-pub async fn player_stats(settings: &Settings, username: &Username) -> Result<LeetifyStats> {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeetifyRank {
+    pub r#type: Option<String>,
+    pub skill_level: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeetifyMiniProfile {
+    pub ratings: LeetifyStats,
+    pub ranks: Vec<LeetifyRank>,
+}
+
+pub async fn player_stats(settings: &Settings, username: &Username) -> Result<LeetifyMiniProfile> {
     let steamid = steamid_for_username(settings.clone(), username)
         .context(format!("No SteamID configured for user {username}"))?;
 
-    let resp = get_leetify_stats(steamid.clone())
+    let mini_profile = get_leetify_mini_profile(steamid.clone())
         .await
-        .context("Failed to fetch Leetify stats")?;
+        .context("Failed to fetch Leetify mini profile")?;
 
-    let stats_value = resp
-        .get("recentGameRatings")
-        .context("No recent Leetify stats found")?;
-    let mut stats = serde_json::from_value::<LeetifyStats>(stats_value.clone())?;
-    let game = last_played_from_leetify_stats(settings, &steamid, &resp);
-
-    if let Ok(game) = game {
-        stats.skill_level = game.skill_level;
-    }
-
-    Ok(stats)
+    Ok(mini_profile)
 }
 
 pub struct HallOfShameEntry {
@@ -157,9 +169,9 @@ pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>>
     Ok(entries)
 }
 
+#[derive(Debug)]
 pub struct HallOfFameEntry {
     pub username: Username,
-    pub last_played: DateTime<Utc>,
     pub skill_level: u32,
 }
 
@@ -171,37 +183,46 @@ pub struct HallOfFame {
 
 /// List top 10 players based on their skill level in their most recent game
 pub async fn hall_of_fame(settings: &Settings) -> Result<HallOfFame> {
-    let mut entries = vec![];
+    let steamid_mappings = settings.players.steamid_mappings.clone();
 
-    for (username, steamid) in settings.players.steamid_mappings.iter() {
-        let resp = get_leetify_stats(steamid.clone()).await;
+    let tasks: Vec<_> = steamid_mappings
+        .into_iter()
+        .map(|(username, steamid)| {
+            tokio::spawn(async move {
+                let resp = get_leetify_mini_profile(steamid.clone()).await;
 
-        let Ok(resp) = resp else {
-            eprintln!(
-                "Failed to fetch Leetify stats for player {username}: {:?}",
-                resp
-            );
-            continue;
-        };
+                let Ok(resp) = resp else {
+                    eprintln!(
+                        "Failed to fetch Leetify mini profile for player {username}: {:?}",
+                        resp
+                    );
 
-        let game = last_played_from_leetify_stats(settings, steamid, &resp);
+                    return None;
+                };
 
-        match game {
-            Ok(game) => {
-                entries.push(HallOfFameEntry {
+                let premier_rank = resp
+                    .ranks
+                    .iter()
+                    .find(|r| r.r#type.as_deref() == Some("premier"));
+                let skill_level = premier_rank.and_then(|r| r.skill_level);
+
+                let Some(skill_level) = skill_level else {
+                    eprintln!("Failed to find premier rank for player {username}");
+
+                    return None;
+                };
+
+                Some(HallOfFameEntry {
                     username: username.clone(),
-                    last_played: game.game_finished_at,
-                    skill_level: game.skill_level.unwrap_or(0),
-                });
-            }
-            Err(e) => {
-                eprintln!(
-                    "Failed to fetch last played stats from Leetify for player {username}: {:?}",
-                    e
-                );
-            }
-        }
-    }
+                    skill_level,
+                })
+            })
+        })
+        .collect();
+
+    let tasks_results = futures::future::join_all(tasks).await;
+
+    let mut entries: Vec<HallOfFameEntry> = tasks_results.into_iter().flatten().flatten().collect();
 
     // Don't include players with no rank or old CSGO premier rank
     entries.retain(|entry| entry.skill_level > 1000);

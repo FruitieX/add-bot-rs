@@ -124,24 +124,28 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
 
     match res {
         Ok(stats) => {
-            let aim = stats.aim;
-            let positioning = stats.positioning;
-            let opening = stats.opening * 100.;
-            let clutch = stats.clutch * 100.;
-            let utility = stats.utility;
+            let aim = stats.ratings.aim;
+            let positioning = stats.ratings.positioning;
+            let opening = stats.ratings.opening * 100.;
+            let clutch = stats.ratings.clutch * 100.;
+            let utility = stats.ratings.utility;
 
             let fmt_leetify_stat = |stat: f32| {
                 let stat = stat * 100.;
                 let sign = if stat > 0. { "+" } else { "" };
                 format!("{sign}{stat:.2}")
             };
-            let ct_leetify = fmt_leetify_stat(stats.ct_leetify);
-            let leetify = fmt_leetify_stat(stats.leetify);
-            let t_leetify = fmt_leetify_stat(stats.t_leetify);
+            let ct_leetify = fmt_leetify_stat(stats.ratings.ct_leetify);
+            let leetify = fmt_leetify_stat(stats.ratings.leetify);
+            let t_leetify = fmt_leetify_stat(stats.ratings.t_leetify);
 
             let leetify = format!("{leetify} (CT: {ct_leetify} / T: {t_leetify})",);
-            let skill_level = stats
-                .skill_level
+            let premier_rank = stats
+                .ranks
+                .iter()
+                .find(|r| r.r#type.as_deref() == Some("premier"));
+            let skill_level = premier_rank
+                .and_then(|r| r.skill_level)
                 .map(|r| r.to_string())
                 .unwrap_or("N/A".to_string());
 

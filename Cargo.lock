@@ -12,6 +12,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "config",
+ "futures",
  "indexmap",
  "lazy_static",
  "log",
