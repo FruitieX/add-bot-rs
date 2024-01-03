@@ -6,32 +6,27 @@ use regex::Regex;
 use crate::types::Username;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub static HELP_TEXT: &str = "These commands are supported:
+lazy_static! {
+    pub static ref HELP_TEXT: String = format!(
+        "add-bot v{VERSION}
 
+The following commands are supported:
 ```
-- /help
-  Displays this help text.
-
-- /{hhmm}
-  Add/remove yourself from the timed queue at hh:mm.
-  For example: /1830
-
-- /add
-  Add/remove yourself from the instant queue.
-
-- /rm
-  Remove yourself from all queues.
-
-- /ls
-  Lists queues.
-```";
+- /1930         Add/remove player from timed queue at 19:30.
+- /add          Add/remove player from the instant queue.
+- /ls           List existing queues.
+- /rm           Remove yourself from all queues.
+- /lastplayed   Last played game stats for player.
+- /stats        Leetify stats for player.
+- /halloffame   Top 10 players by skill level.
+- /hallofshame  Top 10 players by last played date.
+```Most commands accept an optional `@username` argument, which defaults to yourself."
+    );
+}
 
 pub enum Command {
     /// Display help text for supported commands.
     Help,
-
-    /// Display bot version
-    Version,
 
     /// Add/remove player from instant queue or timed queue.
     AddRemove {
@@ -51,20 +46,16 @@ pub enum Command {
     /// Last played stats from Leetify
     LastPlayed { for_user: Option<Username> },
 
-    /// Last played sorted by ascending date
+    /// Top 10 players by last played date
     HallOfShame,
 
-    /// Playres sorted by skill level
+    /// Top 10 players by skill level
     HallOfFame,
 }
 
 impl Command {
-    pub fn help() -> &'static str {
-        HELP_TEXT
-    }
-
-    pub fn version() -> String {
-        format!("add-bot v{}", VERSION)
+    pub fn help() -> String {
+        HELP_TEXT.as_str().to_string()
     }
 }
 
@@ -77,8 +68,8 @@ struct CmdMatches {
 
 /// Parses a Telegram message into command name, bot name and arguments.
 fn get_cmd_matches(text: &str) -> Option<CmdMatches> {
+    // Construct a regex that matches TG commands
     lazy_static! {
-        // Construct a regex that matches TG commands
         static ref RE: Regex = Regex::new(r"^/([^@\s]+)@?(?:(\S+)|)\s?([\s\S]*)$").unwrap();
     }
 
@@ -144,23 +135,24 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
         let CmdMatches { cmd, args, .. } = cmd_matches;
 
         match cmd.as_str() {
-            "help" | "info" => Some(Command::Help),
-            "version" | "v" => Some(Command::Version),
+            "help" | "info" | "version" | "v" | "start" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "stats" => {
+            "statistics" | "stats" | "leetify" => {
                 let for_user = args.and_then(parse_username_arg);
 
                 Some(Command::Stats { for_user })
             }
-            "hallofshame" => Some(Command::HallOfShame),
-            "halloffame" | "top" | "top10" | "ranks" | "premier" => Some(Command::HallOfFame),
+            "hallofshame" | "wallofshame" | "shame" => Some(Command::HallOfShame),
+            "halloffame" | "walloffame" | "fame" | "top" | "top10" | "ranks" | "premier" => {
+                Some(Command::HallOfFame)
+            }
             "lastplayed" => {
                 let for_user = args.and_then(parse_username_arg);
 
                 Some(Command::LastPlayed { for_user })
             }
-            "add" | "heti" | "kynär" | "kynäri" => {
+            "add" | "instant" | "heti" | "kynär" | "kynäri" => {
                 let for_user = args.and_then(parse_username_arg);
 
                 Some(Command::AddRemove {
