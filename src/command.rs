@@ -150,6 +150,10 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                 })
             }
 
+            "wingman" => Some(Command::HallOfFame {
+                rank_type: "wingman".to_string(),
+            }),
+
             "cs_office" | "office" => Some(Command::HallOfFame {
                 rank_type: "cs_office".to_string(),
             }),

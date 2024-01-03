@@ -106,6 +106,7 @@ pub struct LeetifyStats {
 #[serde(rename_all = "camelCase")]
 pub struct LeetifyRank {
     pub r#type: Option<String>,
+    pub data_source: Option<String>,
     pub skill_level: Option<u32>,
 }
 
@@ -190,6 +191,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
         .map(|(username, steamid)| {
             let rank_type = rank_type.clone();
 
+            // TODO: perform only the data fetching in async task
             tokio::spawn(async move {
                 let resp = get_leetify_mini_profile(steamid.clone()).await;
 
@@ -202,10 +204,14 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
                     return None;
                 };
 
-                let premier_rank = resp
-                    .ranks
-                    .iter()
-                    .find(|r| r.r#type.as_ref() == Some(&rank_type));
+                let premier_rank = resp.ranks.iter().find(|r| {
+                    if rank_type == "wingman" {
+                        r.data_source.as_deref() == Some("matchmaking_wingman")
+                    } else {
+                        r.data_source.as_deref() == Some("matchmaking")
+                            && r.r#type.as_ref() == Some(&rank_type)
+                    }
+                });
                 let skill_level = premier_rank.and_then(|r| r.skill_level);
 
                 let Some(skill_level) = skill_level else {
