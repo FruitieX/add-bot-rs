@@ -36,7 +36,11 @@ async fn main() -> Result<()> {
     let bot = Bot::with_client(&settings.teloxide.bot_api_token, client_from_env());
 
     // Spawn a new task that polls for queues that have timed out.
-    tokio::spawn(commands::queue::poll_for_timeouts(sc.clone(), tz, bot.clone()));
+    tokio::spawn(commands::queue::poll_for_timeouts(
+        sc.clone(),
+        tz,
+        bot.clone(),
+    ));
 
     // Start polling for Telegram messages.
     teloxide::repl(bot.clone(), move |message: Message, bot: Bot| {
