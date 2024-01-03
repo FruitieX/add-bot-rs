@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/FruitieX/add-bot-rs/compare/v0.5.0...v0.6.0) (2024-01-03)
+
+
+### Features
+
+* use leetify mini stats for top10 & stats commands ([5fc04e3](https://github.com/FruitieX/add-bot-rs/commit/5fc04e3ae0160da6362a0e9f53f4540ab19390ad))
+
 ## [0.5.0](https://github.com/FruitieX/add-bot-rs/compare/v0.4.0...v0.5.0) (2024-01-03)
 
 
