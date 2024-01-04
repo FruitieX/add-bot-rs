@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/FruitieX/add-bot-rs/compare/v0.6.0...v0.7.0) (2024-01-04)
+
+
+### Features
+
+* allow specifying map for hall of fame ([214ee15](https://github.com/FruitieX/add-bot-rs/commit/214ee15defcbeff0035f89426c1f61d18b85af6a))
+
 ## [0.6.0](https://github.com/FruitieX/add-bot-rs/compare/v0.5.0...v0.6.0) (2024-01-03)
 
 
