@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/FruitieX/add-bot-rs/compare/v0.7.0...v0.7.1) (2024-01-04)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate serde_json to v1.0.111 ([a34a26f](https://github.com/FruitieX/add-bot-rs/commit/a34a26f3e7379d1542ca021071f6921dc5ad9c13))
+* tweaks to top10 lists ([94def1c](https://github.com/FruitieX/add-bot-rs/commit/94def1c70d7488e57cdda817c0b810f519f596f9))
+
 ## [0.7.0](https://github.com/FruitieX/add-bot-rs/compare/v0.6.0...v0.7.0) (2024-01-04)
 
 
