@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/FruitieX/add-bot-rs/compare/v0.7.1...v0.8.0) (2024-01-04)
+
+
+### Features
+
+* support listing wingman ranks ([c2f2e7e](https://github.com/FruitieX/add-bot-rs/commit/c2f2e7edfdb0e64766c899e9e0cbb70a94dd0755))
+
 ## [0.7.1](https://github.com/FruitieX/add-bot-rs/compare/v0.7.0...v0.7.1) (2024-01-04)
 
 
