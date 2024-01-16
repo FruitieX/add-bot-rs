@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.0](https://github.com/FruitieX/add-bot-rs/compare/v0.8.0...v0.9.0) (2024-01-16)
+
+
+### Features
+
+* show recent match results ([71f072b](https://github.com/FruitieX/add-bot-rs/commit/71f072b95e1c56718dadf13fb34125b74debf5ba))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate clap to v4.4.13 ([40882d4](https://github.com/FruitieX/add-bot-rs/commit/40882d4c383ac23a7eb73edced7334f7592c1401))
+* **deps:** update rust crate clap to v4.4.14 ([56d1db5](https://github.com/FruitieX/add-bot-rs/commit/56d1db5532108c1a951a496236c615a390aba3b1))
+* **deps:** update rust crate clap to v4.4.15 ([f9cf5c0](https://github.com/FruitieX/add-bot-rs/commit/f9cf5c0db636060ae12fdb56734758bac436ddda))
+* **deps:** update rust crate clap to v4.4.16 ([0506381](https://github.com/FruitieX/add-bot-rs/commit/0506381fea6ba1e1bda6374d6a047daf139e6332))
+* **deps:** update rust crate clap to v4.4.17 ([afcbc4b](https://github.com/FruitieX/add-bot-rs/commit/afcbc4b12299b799c0acb4816be47aab878fa293))
+* **deps:** update rust crate serde to v1.0.195 ([71d158b](https://github.com/FruitieX/add-bot-rs/commit/71d158b8559d640b3751b21026be181ee91e368c))
+
 ## [0.8.0](https://github.com/FruitieX/add-bot-rs/compare/v0.7.1...v0.8.0) (2024-01-04)
 
 
