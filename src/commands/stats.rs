@@ -147,8 +147,14 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
                 .and_then(|r| r.skill_level)
                 .map(|r| r.to_string())
                 .unwrap_or("N/A".to_string());
+            let recent_results = stats
+                .recent_matches
+                .iter()
+                .map(|m| m.result.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
 
-            let text = format!("Stats for {username} from last 30 matches:\n- Leetify rating: {leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}");
+            let text = format!("Stats for {username} from last 30 matches:\n- Leetify rating: {leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}\n- Recent results: {recent_results}");
             text
         }
         Err(e) => {

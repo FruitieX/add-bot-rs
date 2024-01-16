@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use anyhow::{Context, Result};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
@@ -112,9 +114,31 @@ pub struct LeetifyRank {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum MatchResult {
+    Loss,
+    Win,
+}
+
+impl Display for MatchResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MatchResult::Loss => write!(f, "L"),
+            MatchResult::Win => write!(f, "W"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecentMatch {
+    pub result: MatchResult,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeetifyMiniProfile {
     pub ratings: LeetifyStats,
     pub ranks: Vec<LeetifyRank>,
+    pub recent_matches: Vec<RecentMatch>,
 }
 
 pub async fn player_stats(settings: &Settings, username: &Username) -> Result<LeetifyMiniProfile> {
@@ -204,7 +228,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
                     return None;
                 };
 
-                let premier_rank = resp.ranks.iter().find(|r| {
+                let leetify_rank = resp.ranks.iter().find(|r| {
                     if rank_type == "wingman" {
                         r.data_source.as_deref() == Some("matchmaking_wingman")
                     } else {
@@ -212,7 +236,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
                             && r.r#type.as_ref() == Some(&rank_type)
                     }
                 });
-                let skill_level = premier_rank.and_then(|r| r.skill_level);
+                let skill_level = leetify_rank.and_then(|r| r.skill_level);
 
                 let Some(skill_level) = skill_level else {
                     eprintln!("Failed to find {rank_type} rank for player {username}");
