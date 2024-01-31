@@ -117,6 +117,7 @@ pub struct LeetifyRank {
 pub enum MatchResult {
     Loss,
     Win,
+    Tie,
 }
 
 impl Display for MatchResult {
@@ -124,6 +125,7 @@ impl Display for MatchResult {
         match self {
             MatchResult::Loss => write!(f, "L"),
             MatchResult::Win => write!(f, "W"),
+            MatchResult::Tie => write!(f, "T"),
         }
     }
 }
