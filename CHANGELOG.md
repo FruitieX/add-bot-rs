@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.1](https://github.com/FruitieX/add-bot-rs/compare/v0.9.0...v0.9.1) (2024-01-31)
+
+
+### Bug Fixes
+
+* add `MatchResult::Tie` variant ([0ed04cc](https://github.com/FruitieX/add-bot-rs/commit/0ed04cc0b81968b6b11c5abcfebe1a3d45aaa060))
+* **deps:** update rust crate cached to v0.48.0 ([c9ffa15](https://github.com/FruitieX/add-bot-rs/commit/c9ffa1510493d254e3dc3aa65519b97c4e264b89))
+* **deps:** update rust crate cached to v0.48.1 ([27d7143](https://github.com/FruitieX/add-bot-rs/commit/27d71438c26b2fa6c670bad5e87e1193a62321df))
+* **deps:** update rust crate chrono to v0.4.32 ([0c2e678](https://github.com/FruitieX/add-bot-rs/commit/0c2e678425dd0ec2bcd9ca19f30c5ee3a7350fd9))
+* **deps:** update rust crate chrono to v0.4.33 ([3b925b8](https://github.com/FruitieX/add-bot-rs/commit/3b925b830965f0c4f70937b2cf57b0b5b4156080))
+* **deps:** update rust crate clap to v4.4.18 ([cda5c4c](https://github.com/FruitieX/add-bot-rs/commit/cda5c4c136e2f1c6502fde39aca8319444ef7a9c))
+* **deps:** update rust crate regex to v1.10.3 ([0a9f55c](https://github.com/FruitieX/add-bot-rs/commit/0a9f55c789f0e299b442f8c7e61a0f65c31b14f1))
+* **deps:** update rust crate serde to v1.0.196 ([872ddbd](https://github.com/FruitieX/add-bot-rs/commit/872ddbdb048c0d54100e9f5de8edb96504043a6e))
+* **deps:** update rust crate serde_json to v1.0.112 ([754f4df](https://github.com/FruitieX/add-bot-rs/commit/754f4df6db2d4788f748660d7dfcfbf4af9fd414))
+* **deps:** update rust crate serde_json to v1.0.113 ([f32bc7d](https://github.com/FruitieX/add-bot-rs/commit/f32bc7deb83e4860edb70ed351ccb1eaf3fafd22))
+
 ## [0.9.0](https://github.com/FruitieX/add-bot-rs/compare/v0.8.0...v0.9.0) (2024-01-16)
 
 
