@@ -20,7 +20,7 @@ chrono-tz = "=0.8.6"
 regex = "=1.10.3"
 lazy_static = "=1.4.0"
 indexmap = { version = "=2.1.0", features = ["serde"] }
-clap = { version = "=4.5.0", features = ["derive"] }
+clap = { version = "=4.5.1", features = ["derive"] }
 cached = { version = "=0.48.1", features = ["default", "async", "async_tokio_rt_multi_thread"] }
 reqwest = { version = "=0.11.24", default-features = false, features = ["tokio-rustls", "rustls", "rustls-tls"] }
 futures = "=0.3.30"
