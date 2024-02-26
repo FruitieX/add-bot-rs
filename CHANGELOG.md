@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.10.0](https://github.com/FruitieX/add-bot-rs/compare/v0.9.1...v0.10.0) (2024-02-26)
+
+
+### Features
+
+* show x days spree ([9fb067b](https://github.com/FruitieX/add-bot-rs/commit/9fb067bbdd52aa9bbfea526731ff71662e4d0bc6))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate anyhow to v1.0.80 ([12faefb](https://github.com/FruitieX/add-bot-rs/commit/12faefbaec4186b016482ed5b9574aea620dab38))
+* **deps:** update rust crate cached to v0.49.2 ([012099a](https://github.com/FruitieX/add-bot-rs/commit/012099aeb52fcfd3795d5df5c067535574b5ecaf))
+* **deps:** update rust crate chrono to v0.4.34 ([22ccc20](https://github.com/FruitieX/add-bot-rs/commit/22ccc205b42dd39e29fde2d25bec60fe7f12d4de))
+* **deps:** update rust crate chrono-tz to v0.8.6 ([d2eadff](https://github.com/FruitieX/add-bot-rs/commit/d2eadff8efe91ff8384debdcefb3e6507d826cc6))
+* **deps:** update rust crate clap to v4.5.0 ([8bf1f05](https://github.com/FruitieX/add-bot-rs/commit/8bf1f0508afdcbb87d38ae29f7a190df767a1fa7))
+* **deps:** update rust crate clap to v4.5.1 ([3d8cc78](https://github.com/FruitieX/add-bot-rs/commit/3d8cc780c7a75a78d251d09daea2002035a8d36a))
+* **deps:** update rust crate config to v0.14.0 ([e04973a](https://github.com/FruitieX/add-bot-rs/commit/e04973a33a33aec81716ab558b3acccc9c4ad778))
+* **deps:** update rust crate reqwest to v0.11.24 ([c6a19d5](https://github.com/FruitieX/add-bot-rs/commit/c6a19d52582bb52899f99eead2a54119c72e484f))
+* **deps:** update rust crate serde to v1.0.197 ([b6a2aac](https://github.com/FruitieX/add-bot-rs/commit/b6a2aac314db2c3539b9706718c05a9c68e208b2))
+* **deps:** update rust crate serde_json to v1.0.114 ([26cb5d0](https://github.com/FruitieX/add-bot-rs/commit/26cb5d05828990e858398d3a885d868f07137f43))
+* **deps:** update rust crate tokio to v1.36.0 ([3652443](https://github.com/FruitieX/add-bot-rs/commit/3652443ec4b889724d023eaebb0697ae8d55df86))
+* downgrade config crate ([0c53a16](https://github.com/FruitieX/add-bot-rs/commit/0c53a16f98e0c08c3aeec2b00bdf4be23692bcc6))
+
 ## [0.9.1](https://github.com/FruitieX/add-bot-rs/compare/v0.9.0...v0.9.1) (2024-01-31)
 
 
