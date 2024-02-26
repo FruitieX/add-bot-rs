@@ -66,8 +66,13 @@ pub async fn hall_of_shame(settings: &Settings, tz: &Tz) -> String {
                     let days = if days_ago == 1 { "day" } else { "days" };
                     let username = &entry.username;
                     let pos = index_to_pos(index);
+                    let spree = if entry.spree > 1 {
+                        format!(" ({spree} day spree)", spree = entry.spree)
+                    } else {
+                        "".to_string()
+                    };
 
-                    format!("{pos} {t} ({days_ago} {days} ago): {username}")
+                    format!("{pos} {t} ({days_ago} {days} ago): {username}{spree}")
                 })
                 .collect::<Vec<String>>()
                 .join("\n");

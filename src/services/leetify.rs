@@ -32,7 +32,7 @@ pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<S
     steamid.cloned()
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LeetifyGame {
     pub own_team_steam64_ids: Vec<SteamID>,
@@ -43,11 +43,17 @@ pub struct LeetifyGame {
     pub skill_level: Option<u32>,
 }
 
+#[derive(Debug)]
+pub struct LastPlayedResult {
+    pub game: LeetifyGame,
+    pub spree: usize,
+}
+
 pub fn last_played_from_leetify_stats(
     settings: &Settings,
     own_steam_id: &SteamID,
     resp: &serde_json::Value,
-) -> Result<LeetifyGame> {
+) -> Result<LastPlayedResult> {
     let games_field = resp
         .get("games")
         .context("Could not find any games in Leetify response")?;
@@ -60,7 +66,7 @@ pub fn last_played_from_leetify_stats(
         .filter(|steam_id| *steam_id != own_steam_id)
         .collect();
 
-    let last_played_with_teammate = games
+    let mut games_with_teammates = games
         .iter()
         .filter(|game| {
             let has_teammate = team_steam_ids
@@ -69,10 +75,42 @@ pub fn last_played_from_leetify_stats(
 
             has_teammate
         })
-        .max_by_key(|game| game.game_finished_at)
-        .context("Could not find any games played with teammates")?;
+        .collect::<Vec<_>>();
 
-    Ok(last_played_with_teammate.clone())
+    let last_played_with_teammate = games_with_teammates
+        .iter()
+        .max_by_key(|game| game.game_finished_at)
+        .context("Could not find any games played with teammates")
+        .cloned()?;
+
+    games_with_teammates.dedup_by_key(|g| g.game_finished_at.date_naive());
+
+    let now = Utc::now().date_naive();
+    let spree = if (now - last_played_with_teammate.game_finished_at.date_naive()).num_days() > 1 {
+        0
+    } else {
+        games_with_teammates
+            .windows(2)
+            .enumerate()
+            .find(|(_, pair)| {
+                let (next, prev) = (pair[0], pair[1]);
+
+                let days_between = (next.game_finished_at.date_naive()
+                    - prev.game_finished_at.date_naive())
+                .num_days();
+
+                days_between > 1
+            })
+            .map(|(idx, _)| idx + 1)
+            .unwrap_or_default()
+    };
+
+    let result = LastPlayedResult {
+        game: (*last_played_with_teammate).clone(),
+        spree,
+    };
+
+    Ok(result)
 }
 
 pub async fn last_played(settings: &Settings, username: &Username) -> Result<LeetifyGame> {
@@ -83,9 +121,9 @@ pub async fn last_played(settings: &Settings, username: &Username) -> Result<Lee
         .await
         .context("Failed to fetch last played stats from Leetify")?;
 
-    let game = last_played_from_leetify_stats(settings, &steamid, &resp)?;
+    let result = last_played_from_leetify_stats(settings, &steamid, &resp)?;
 
-    Ok(game)
+    Ok(result.game)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,6 +195,7 @@ pub async fn player_stats(settings: &Settings, username: &Username) -> Result<Le
 pub struct HallOfShameEntry {
     pub username: Username,
     pub last_played: DateTime<Utc>,
+    pub spree: usize,
 }
 
 pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>> {
@@ -173,13 +212,14 @@ pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>>
             continue;
         };
 
-        let game = last_played_from_leetify_stats(settings, steamid, &resp);
+        let result = last_played_from_leetify_stats(settings, steamid, &resp);
 
-        match game {
-            Ok(game) => {
+        match result {
+            Ok(result) => {
                 entries.push(HallOfShameEntry {
                     username: username.clone(),
-                    last_played: game.game_finished_at,
+                    last_played: result.game.game_finished_at,
+                    spree: result.spree,
                 });
             }
             Err(e) => {
@@ -191,7 +231,7 @@ pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>>
         }
     }
 
-    entries.sort_by_key(|entry| entry.last_played);
+    entries.sort_by_key(|entry| (entry.last_played, entry.spree));
 
     Ok(entries)
 }
