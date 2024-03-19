@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.1](https://github.com/FruitieX/add-bot-rs/compare/v0.10.0...v0.10.1) (2024-03-19)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate anyhow to v1.0.81 ([f395f35](https://github.com/FruitieX/add-bot-rs/commit/f395f35b29b40b41a1e43ed94baad8433400e5bf))
+* **deps:** update rust crate clap to v4.5.2 ([5deb74b](https://github.com/FruitieX/add-bot-rs/commit/5deb74bf1924c4cd2575dc99fd38076ae1381579))
+* **deps:** update rust crate clap to v4.5.3 ([fdb4c8e](https://github.com/FruitieX/add-bot-rs/commit/fdb4c8e5227e0260f083ea633374e32b50861128))
+* **deps:** update rust crate log to v0.4.21 ([129313d](https://github.com/FruitieX/add-bot-rs/commit/129313d1594087e2acd39bbda233aa58ea015647))
+* **deps:** update rust crate reqwest to v0.11.25 ([96de4b1](https://github.com/FruitieX/add-bot-rs/commit/96de4b1991daf5e92120a560a5c61f6139cd18d4))
+* **deps:** update rust crate reqwest to v0.11.26 ([69b0e45](https://github.com/FruitieX/add-bot-rs/commit/69b0e45b4c83be58c59a8220cc68335e656d42bb))
+* **deps:** update rust crate reqwest to v0.11.27 ([fc7af19](https://github.com/FruitieX/add-bot-rs/commit/fc7af19e77653d35b066a2cde472a2126f30f0ab))
+
 ## [0.10.0](https://github.com/FruitieX/add-bot-rs/compare/v0.9.1...v0.10.0) (2024-02-26)
 
 
