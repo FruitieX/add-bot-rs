@@ -31,7 +31,7 @@ cached = { version = "=0.53.1", features = [
     "async",
     "async_tokio_rt_multi_thread",
 ] }
-reqwest = { version = "=0.11.27", default-features = false, features = [
+reqwest = { version = "=0.12.8", default-features = false, features = [
     "tokio-rustls",
     "rustls",
     "rustls-tls",
