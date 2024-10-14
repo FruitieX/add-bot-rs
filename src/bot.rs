@@ -23,27 +23,27 @@ pub async fn handle_cmd(
 ) -> Option<()> {
     let state = sc.read().await;
     let chat_id = msg.chat.id;
-    let user = msg.from()?;
+    let user = msg.from?;
 
     let markdown = matches!(cmd, Command::Help);
 
     let text = match cmd {
         Command::Help => Command::help(),
         Command::AddRemove { time, for_user } => {
-            let username = for_user.unwrap_or_else(|| mk_username(user));
+            let username = for_user.unwrap_or_else(|| mk_username(&user));
             add_remove(username, state, chat_id, &tz, time, &sc).await
         }
         Command::RemoveAll => {
-            let username = mk_username(user);
+            let username = mk_username(&user);
             remove_all(username, state, chat_id, &sc).await
         }
         Command::List => list(state, chat_id, &tz),
         Command::Stats { for_user } => {
-            let username = for_user.unwrap_or_else(|| mk_username(user));
+            let username = for_user.unwrap_or_else(|| mk_username(&user));
             stats(&settings, &username).await
         }
         Command::LastPlayed { for_user } => {
-            let username = for_user.unwrap_or_else(|| mk_username(user));
+            let username = for_user.unwrap_or_else(|| mk_username(&user));
             last_played(&settings, &tz, username).await
         }
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,

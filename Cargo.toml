@@ -7,10 +7,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-teloxide = { version = "=0.12.2", features = [
+teloxide = { version = "=0.13.0", features = [
     "ctrlc_handler",
     "macros",
-    "auto-send",
     "rustls",
 ], default-features = false }
 config = "=0.13.4"
