@@ -190,7 +190,7 @@ impl State {
                 .iter_mut()
                 .map(|(queue_id, queue)| {
                     // Remove player from all chat queues
-                    let removed = queue.players.remove(username);
+                    let removed = queue.players.shift_remove(username);
 
                     if removed {
                         affected_queues.insert(queue_id.clone(), queue.clone());
