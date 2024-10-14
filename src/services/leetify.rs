@@ -34,6 +34,7 @@ pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<S
 
 #[derive(Clone, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct LeetifyGame {
     pub own_team_steam64_ids: Vec<SteamID>,
     pub game_finished_at: DateTime<Utc>,
@@ -126,6 +127,7 @@ pub async fn last_played(settings: &Settings, username: &Username) -> Result<Lee
     Ok(result.game)
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LeetifyStats {
