@@ -2,11 +2,12 @@ use crate::{
     command::Command,
     commands::{
         queue::{add_remove, list, remove_all},
+        sahko::get_sahko_inputfile,
         stats::{hall_of_fame, hall_of_shame, last_played, stats},
     },
     settings::Settings,
     state_container::StateContainer,
-    util::{mk_username, send_msg},
+    util::{mk_username, send_msg, send_photo},
 };
 
 use chrono_tz::Tz;
@@ -48,9 +49,14 @@ pub async fn handle_cmd(
         }
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,
         Command::HallOfFame { rank_type } => hall_of_fame(&settings, rank_type).await,
+        Command::Sahko => String::new(),
     };
 
-    send_msg(&bot, &chat_id, &text, markdown).await;
+    // TODO: Do something smarter
+    match text.as_str() {
+        "" => send_photo(&bot, &chat_id, get_sahko_inputfile().await).await,
+        _ => send_msg(&bot, &chat_id, &text, markdown).await,
+    };
 
     Some(())
 }
