@@ -39,6 +39,7 @@ plotters = { version = "=0.3.7", default-features = false, features = [
     "ab_glyph",
     "bitmap_backend",
     "chrono",
-    "line_series",
+    "all_series",
+    "all_elements",
 ] }
 image = { version = "=0.25.2", features = ["png"] }
