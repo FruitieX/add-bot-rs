@@ -5,7 +5,7 @@ use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
     prelude::{BitMapBackend, IntoDrawingArea},
     series::LineSeries,
-    style::{BLUE, WHITE},
+    style::{register_font, FontStyle, BLUE, WHITE},
 };
 use serde::Deserialize;
 
@@ -21,6 +21,13 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
     // Generate a chart
     let width: u32 = 1024;
     let height: u32 = 768;
+
+    register_font(
+        "sans-serif",
+        FontStyle::Normal,
+        include_bytes!("../../assets/Roboto-Regular.ttf"),
+    )
+    .map_err(|_| anyhow::anyhow!("Failed to register font"))?;
 
     let mut buffer_ =
         vec![0; usize::try_from(width).unwrap() * usize::try_from(height).unwrap() * 3];
