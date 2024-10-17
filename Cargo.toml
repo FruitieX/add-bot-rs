@@ -38,8 +38,8 @@ futures = "=0.3.31"
 plotters = { version = "=0.3.7", default-features = false, features = [
     "ab_glyph",
     "bitmap_backend",
+    # "svg_backend",
     "chrono",
-    "all_series",
-    "all_elements",
+    "line_series",
 ] }
 image = { version = "=0.25.2", features = ["png"] }

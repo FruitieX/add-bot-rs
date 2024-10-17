@@ -49,14 +49,13 @@ pub async fn handle_cmd(
         }
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,
         Command::HallOfFame { rank_type } => hall_of_fame(&settings, rank_type).await,
-        Command::Sahko => String::new(),
+        Command::Sahko => {
+            send_photo(&bot, &chat_id, get_sahko_inputfile().await).await;
+            return Some(());
+        }
     };
 
-    // TODO: Do something smarter
-    match text.as_str() {
-        "" => send_photo(&bot, &chat_id, get_sahko_inputfile().await).await,
-        _ => send_msg(&bot, &chat_id, &text, markdown).await,
-    };
+    send_msg(&bot, &chat_id, &text, markdown).await;
 
     Some(())
 }

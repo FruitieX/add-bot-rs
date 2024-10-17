@@ -158,7 +158,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                     rank_type: "premier".to_string(),
                 })
             }
-            "sahko" => Some(Command::Sahko),
+            "sahko" | "el" | "elpriser" => Some(Command::Sahko),
 
             "wingman" => Some(Command::HallOfFame {
                 rank_type: "wingman".to_string(),
