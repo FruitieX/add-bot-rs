@@ -6,7 +6,7 @@ use chrono::NaiveTime;
 use teloxide::{
     payloads::SendMessageSetters,
     prelude::{Request, Requester},
-    types::{ChatId, ParseMode, User},
+    types::{ChatId, InputFile, ParseMode, User},
     Bot,
 };
 
@@ -50,6 +50,17 @@ pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str, markdown: bool) {
 
     if let Err(error) = res {
         eprintln!("Error while sending Telegram message: {}", error);
+    }
+}
+
+/// Helper for sending Telegram photo (and logging errors to stderr).
+pub async fn send_photo(bot: &Bot, chat_id: &ChatId, photo: InputFile) {
+    let request = bot.send_photo(*chat_id, photo);
+
+    let res = request.send().await;
+
+    if let Err(error) = res {
+        eprintln!("Error while sending Telegram photo message: {}", error);
     }
 }
 

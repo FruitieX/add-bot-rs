@@ -41,16 +41,25 @@ pub enum Command {
     List,
 
     /// Leetify stats for user
-    Stats { for_user: Option<Username> },
+    Stats {
+        for_user: Option<Username>,
+    },
 
     /// Last played stats from Leetify
-    LastPlayed { for_user: Option<Username> },
+    LastPlayed {
+        for_user: Option<Username>,
+    },
 
     /// Top 10 players by last played date
     HallOfShame,
 
     /// Top 10 players by skill level
-    HallOfFame { rank_type: String },
+    HallOfFame {
+        rank_type: String,
+    },
+
+    // Get the latest electricity prices as a chart
+    Sahko,
 }
 
 impl Command {
@@ -149,6 +158,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                     rank_type: "premier".to_string(),
                 })
             }
+            "sahko" | "el" | "elpriser" => Some(Command::Sahko),
 
             "wingman" => Some(Command::HallOfFame {
                 rank_type: "wingman".to_string(),
