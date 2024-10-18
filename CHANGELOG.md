@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.1](https://github.com/FruitieX/add-bot-rs/compare/v0.11.0...v0.11.1) (2024-10-18)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate image to v0.25.3 ([4db1aaa](https://github.com/FruitieX/add-bot-rs/commit/4db1aaadf9ad3723afc3c187a6fc0f1ea69b446c))
+* **deps:** update rust crate image to v0.25.4 ([0812e9d](https://github.com/FruitieX/add-bot-rs/commit/0812e9d8d4410d8648af6a38d413c931b17f5a79))
+* **deps:** update rust crate serde_json to v1.0.129 ([8f82694](https://github.com/FruitieX/add-bot-rs/commit/8f82694b237d35bcf4effe18a0d030031887f697))
+
 ## [0.11.0](https://github.com/FruitieX/add-bot-rs/compare/v0.10.0...v0.11.0) (2024-10-17)
 
 
