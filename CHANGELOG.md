@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.11.1](https://github.com/FruitieX/add-bot-rs/compare/v0.11.0...v0.11.1) (2024-10-24)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate anyhow to v1.0.90 ([4c7b8f9](https://github.com/FruitieX/add-bot-rs/commit/4c7b8f942667dc65f2e8295ea3cd6e3668824a2f))
+* **deps:** update rust crate anyhow to v1.0.91 ([1cb7fb9](https://github.com/FruitieX/add-bot-rs/commit/1cb7fb98757bec970485e46c7196d54bb4e55dc4))
+* **deps:** update rust crate config to v0.14.1 ([780cdde](https://github.com/FruitieX/add-bot-rs/commit/780cddefb725e6a20d7142000432fbd67bc33757))
+* **deps:** update rust crate image to v0.25.3 ([4db1aaa](https://github.com/FruitieX/add-bot-rs/commit/4db1aaadf9ad3723afc3c187a6fc0f1ea69b446c))
+* **deps:** update rust crate image to v0.25.4 ([0812e9d](https://github.com/FruitieX/add-bot-rs/commit/0812e9d8d4410d8648af6a38d413c931b17f5a79))
+* **deps:** update rust crate regex to v1.11.1 ([fb0c28d](https://github.com/FruitieX/add-bot-rs/commit/fb0c28d6aa3eeb1510c429b22c7f1ab0ee03a76b))
+* **deps:** update rust crate serde to v1.0.211 ([682f83a](https://github.com/FruitieX/add-bot-rs/commit/682f83a5ca3fd0ab5d0fe396e26f5e095bd73e60))
+* **deps:** update rust crate serde to v1.0.213 ([4f71632](https://github.com/FruitieX/add-bot-rs/commit/4f716328894a971dfdfdf31dd99be769ad581691))
+* **deps:** update rust crate serde_json to v1.0.129 ([8f82694](https://github.com/FruitieX/add-bot-rs/commit/8f82694b237d35bcf4effe18a0d030031887f697))
+* **deps:** update rust crate serde_json to v1.0.130 ([df61034](https://github.com/FruitieX/add-bot-rs/commit/df610344aae29177e93cdc49afc979b063d37b13))
+* **deps:** update rust crate serde_json to v1.0.131 ([92f9b5b](https://github.com/FruitieX/add-bot-rs/commit/92f9b5bed9a578fa18ed6975e075897606e9392a))
+* **deps:** update rust crate serde_json to v1.0.132 ([4b141f9](https://github.com/FruitieX/add-bot-rs/commit/4b141f9b2633935569c15d954903ce1491986c89))
+* **deps:** update rust crate tokio to v1.41.0 ([bc9d233](https://github.com/FruitieX/add-bot-rs/commit/bc9d23349dcb22e6280d934457c76256025c8fc8))
+
 ## [0.11.0](https://github.com/FruitieX/add-bot-rs/compare/v0.10.0...v0.11.0) (2024-10-17)
 
 
