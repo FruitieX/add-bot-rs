@@ -42,4 +42,4 @@ plotters = { version = "=0.3.7", default-features = false, features = [
     "chrono",
     "line_series",
 ] }
-image = { version = "=0.25.4", features = ["png"] }
+image = { version = "=0.25.5", features = ["png"] }
