@@ -115,6 +115,10 @@ fn matches_timed_queue(cmd: &str) -> bool {
     RE.is_match(cmd)
 }
 
+fn matches_cs_map_name(cmd: &str) -> bool {
+    cmd.starts_with("de_") || cmd.starts_with("cs_")
+}
+
 fn parse_time_arg(s: &str) -> Result<NaiveTime, chrono::ParseError> {
     // Left pad with zeroes.
     let timed_queue = format!("{:0>4}", s);
@@ -166,6 +170,9 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
 
             "cs_office" | "office" => Some(Command::HallOfFame {
                 rank_type: "cs_office".to_string(),
+            }),
+            "cs_italy" | "italy" => Some(Command::HallOfFame {
+                rank_type: "cs_italy".to_string(),
             }),
             "de_mirage" | "mirage" => Some(Command::HallOfFame {
                 rank_type: "de_mirage".to_string(),
@@ -221,6 +228,10 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                     Some(Command::AddRemove {
                         time: Some(parsed_time),
                         for_user,
+                    })
+                } else if matches_cs_map_name(&cmd) {
+                    Some(Command::HallOfFame {
+                        rank_type: cmd.to_string(),
                     })
                 } else {
                     None
