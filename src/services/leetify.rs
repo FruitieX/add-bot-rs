@@ -1,17 +1,17 @@
-use std::fmt::Display;
-
 use anyhow::{Context, Result};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use serde::Deserialize;
+use std::fmt::Display;
 
 use crate::{
     settings::Settings,
     types::{SteamID, Username},
 };
 
-#[cached(result = true, time = 3600, sync_writes = true)]
-pub async fn get_leetify_stats(steam_id: SteamID) -> Result<serde_json::Value> {
+#[cached(result = true, time = 60)]
+async fn get_leetify_stats(steam_id: SteamID) -> Result<serde_json::Value> {
     println!("Fetching Leetify stats for SteamID {steam_id}");
     let url = format!("https://api.leetify.com/api/profile/{steam_id}");
     let resp = reqwest::get(&url).await?.json().await?;
@@ -201,37 +201,55 @@ pub struct HallOfShameEntry {
 }
 
 pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>> {
-    let mut entries = vec![];
+    let steamid_mappings = settings.players.steamid_mappings.clone();
 
-    for (username, steamid) in settings.players.steamid_mappings.iter() {
-        let resp = get_leetify_stats(steamid.clone()).await;
+    let futures: Vec<_> = steamid_mappings
+        .into_iter()
+        .map(|(username, steamid)| {
+            let settings = settings.clone();
 
-        let Ok(resp) = resp else {
-            eprintln!(
-                "Failed to fetch Leetify stats for player {username}: {:?}",
-                resp
-            );
-            continue;
-        };
+            // TODO: perform only the data fetching in async task
+            async move {
+                let resp = get_leetify_stats(steamid.clone()).await;
 
-        let result = last_played_from_leetify_stats(settings, steamid, &resp);
+                let Ok(resp) = resp else {
+                    eprintln!(
+                        "Failed to fetch Leetify stats for player {username}: {:?}",
+                        resp
+                    );
 
-        match result {
-            Ok(result) => {
-                entries.push(HallOfShameEntry {
-                    username: username.clone(),
-                    last_played: result.game.game_finished_at,
-                    spree: result.spree,
-                });
+                    return None;
+                };
+
+                let result = last_played_from_leetify_stats(&settings, &steamid, &resp);
+
+                match result {
+                    Ok(result) => Some(HallOfShameEntry {
+                        username: username.clone(),
+                        last_played: result.game.game_finished_at,
+                        spree: result.spree,
+                    }),
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to fetch last played stats from Leetify for player {username}: {:?}",
+                            e
+                        );
+
+                        None
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!(
-                    "Failed to fetch last played stats from Leetify for player {username}: {:?}",
-                    e
-                );
-            }
-        }
-    }
+        })
+        .collect();
+
+    // create a buffered stream that will execute up to 3 futures in parallel
+    // (without preserving the order of the results)
+    let stream = futures::stream::iter(futures).buffer_unordered(3);
+
+    // wait for all futures to complete
+    let tasks_results = stream.collect::<Vec<_>>().await;
+
+    let mut entries: Vec<HallOfShameEntry> = tasks_results.into_iter().flatten().collect();
 
     entries.sort_by_key(|entry| (entry.last_played, entry.spree));
 
@@ -254,13 +272,13 @@ pub struct HallOfFame {
 pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<HallOfFame> {
     let steamid_mappings = settings.players.steamid_mappings.clone();
 
-    let tasks: Vec<_> = steamid_mappings
+    let futures: Vec<_> = steamid_mappings
         .into_iter()
         .map(|(username, steamid)| {
             let rank_type = rank_type.clone();
 
             // TODO: perform only the data fetching in async task
-            tokio::spawn(async move {
+            async move {
                 let resp = get_leetify_mini_profile(steamid.clone()).await;
 
                 let Ok(resp) = resp else {
@@ -292,13 +310,18 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
                     username: username.clone(),
                     skill_level,
                 })
-            })
+            }
         })
         .collect();
 
-    let tasks_results = futures::future::join_all(tasks).await;
+    // create a buffered stream that will execute up to 3 futures in parallel
+    // (without preserving the order of the results)
+    let stream = futures::stream::iter(futures).buffer_unordered(3);
 
-    let mut entries: Vec<HallOfFameEntry> = tasks_results.into_iter().flatten().flatten().collect();
+    // wait for all futures to complete
+    let tasks_results = stream.collect::<Vec<_>>().await;
+
+    let mut entries: Vec<HallOfFameEntry> = tasks_results.into_iter().flatten().collect();
 
     // Don't include players with no rank
     entries.retain(|entry| entry.skill_level != 0);
