@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.12.0](https://github.com/FruitieX/add-bot-rs/compare/v0.11.0...v0.12.0) (2024-11-20)
+
+
+### Features
+
+* add support for any de_* & cs_* map rankings ([d5789ee](https://github.com/FruitieX/add-bot-rs/commit/d5789eeb6a0d47a68f809e8b8efc3dd12a2bf9e4))
+* cache leetify api error responses to reduce spam ([c687ff9](https://github.com/FruitieX/add-bot-rs/commit/c687ff9c464fd484b7d6597b484045a2086bec60))
+* display cs rank for non premier ratings ([1c7ac97](https://github.com/FruitieX/add-bot-rs/commit/1c7ac9769ad2cd8ddc9ae9722d5b3295fb12334f))
+
+
+### Bug Fixes
+
+* allow running 3 leetify fetches at once ([efab2c6](https://github.com/FruitieX/add-bot-rs/commit/efab2c68e71b38ab0e38a7bce59f36e1d98ac9ea))
+* **deps:** update rust crate anyhow to v1.0.90 ([4c7b8f9](https://github.com/FruitieX/add-bot-rs/commit/4c7b8f942667dc65f2e8295ea3cd6e3668824a2f))
+* **deps:** update rust crate anyhow to v1.0.91 ([1cb7fb9](https://github.com/FruitieX/add-bot-rs/commit/1cb7fb98757bec970485e46c7196d54bb4e55dc4))
+* **deps:** update rust crate anyhow to v1.0.92 ([5897074](https://github.com/FruitieX/add-bot-rs/commit/5897074b929c0aeab1813da8d6d6aeb3b3c82564))
+* **deps:** update rust crate anyhow to v1.0.93 ([8ece0d5](https://github.com/FruitieX/add-bot-rs/commit/8ece0d5715fca1e4513993bc29e652002ab925e4))
+* **deps:** update rust crate cached to v0.54.0 ([13ba78d](https://github.com/FruitieX/add-bot-rs/commit/13ba78d66e5b5dbd410dff156e9216be30c0d281))
+* **deps:** update rust crate clap to v4.5.21 ([#400](https://github.com/FruitieX/add-bot-rs/issues/400)) ([8edb538](https://github.com/FruitieX/add-bot-rs/commit/8edb53892b891236fd088b6d18dbacfa0ab2009c))
+* **deps:** update rust crate config to v0.14.1 ([780cdde](https://github.com/FruitieX/add-bot-rs/commit/780cddefb725e6a20d7142000432fbd67bc33757))
+* **deps:** update rust crate image to v0.25.3 ([4db1aaa](https://github.com/FruitieX/add-bot-rs/commit/4db1aaadf9ad3723afc3c187a6fc0f1ea69b446c))
+* **deps:** update rust crate image to v0.25.4 ([0812e9d](https://github.com/FruitieX/add-bot-rs/commit/0812e9d8d4410d8648af6a38d413c931b17f5a79))
+* **deps:** update rust crate image to v0.25.5 ([edf25e2](https://github.com/FruitieX/add-bot-rs/commit/edf25e2c95a65aca420d2730426bdb9c28b607cd))
+* **deps:** update rust crate regex to v1.11.1 ([fb0c28d](https://github.com/FruitieX/add-bot-rs/commit/fb0c28d6aa3eeb1510c429b22c7f1ab0ee03a76b))
+* **deps:** update rust crate reqwest to v0.12.9 ([9387a1b](https://github.com/FruitieX/add-bot-rs/commit/9387a1bd9d6d5cfe2a51ebde05d5155d5715466f))
+* **deps:** update rust crate serde to v1.0.211 ([682f83a](https://github.com/FruitieX/add-bot-rs/commit/682f83a5ca3fd0ab5d0fe396e26f5e095bd73e60))
+* **deps:** update rust crate serde to v1.0.213 ([4f71632](https://github.com/FruitieX/add-bot-rs/commit/4f716328894a971dfdfdf31dd99be769ad581691))
+* **deps:** update rust crate serde to v1.0.214 ([fbdfc49](https://github.com/FruitieX/add-bot-rs/commit/fbdfc49c4ff7c5865df0f35bfa7f7668137313f9))
+* **deps:** update rust crate serde to v1.0.215 ([#398](https://github.com/FruitieX/add-bot-rs/issues/398)) ([39bcd24](https://github.com/FruitieX/add-bot-rs/commit/39bcd248692f1310cd1f7a0df6d5974361e69cb5))
+* **deps:** update rust crate serde_json to v1.0.129 ([8f82694](https://github.com/FruitieX/add-bot-rs/commit/8f82694b237d35bcf4effe18a0d030031887f697))
+* **deps:** update rust crate serde_json to v1.0.130 ([df61034](https://github.com/FruitieX/add-bot-rs/commit/df610344aae29177e93cdc49afc979b063d37b13))
+* **deps:** update rust crate serde_json to v1.0.131 ([92f9b5b](https://github.com/FruitieX/add-bot-rs/commit/92f9b5bed9a578fa18ed6975e075897606e9392a))
+* **deps:** update rust crate serde_json to v1.0.132 ([4b141f9](https://github.com/FruitieX/add-bot-rs/commit/4b141f9b2633935569c15d954903ce1491986c89))
+* **deps:** update rust crate serde_json to v1.0.133 ([#401](https://github.com/FruitieX/add-bot-rs/issues/401)) ([c2ea5d1](https://github.com/FruitieX/add-bot-rs/commit/c2ea5d151b7a94c3e25d666beb43b8f57f2e448e))
+* **deps:** update rust crate tokio to v1.41.0 ([bc9d233](https://github.com/FruitieX/add-bot-rs/commit/bc9d23349dcb22e6280d934457c76256025c8fc8))
+* **deps:** update rust crate tokio to v1.41.1 ([#396](https://github.com/FruitieX/add-bot-rs/issues/396)) ([a8ce2cc](https://github.com/FruitieX/add-bot-rs/commit/a8ce2cc43a6a1df5c7c9cb640e28cf45ed6fa44f))
+* downgrade config crate ([7d91ff6](https://github.com/FruitieX/add-bot-rs/commit/7d91ff6c38513ac5e79db5017e93cf12e7d5c498))
+
 ## [0.11.0](https://github.com/FruitieX/add-bot-rs/compare/v0.10.0...v0.11.0) (2024-10-17)
 
 
