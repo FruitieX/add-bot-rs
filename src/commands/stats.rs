@@ -12,6 +12,40 @@ fn index_to_pos(index: usize) -> String {
     }
 }
 
+fn skill_level_to_cs2_rank(skill_level: u32) -> String {
+    let ranks = [
+        "Silver I",
+        "Silver II",
+        "Silver III",
+        "Silver IV",
+        "Silver Elite",
+        "Silver Elite Master",
+        "Gold Nova I",
+        "Gold Nova II",
+        "Gold Nova III",
+        "Gold Nova Master",
+        "Master Guardian I",
+        "Master Guardian II",
+        "Master Guardian Elite",
+        "Distinguished Master Guardian",
+        "Legendary Eagle",
+        "Legendary Eagle Master",
+        "Supreme Master First Class",
+        "Global Elite",
+    ];
+
+    if skill_level < 1000 {
+        let rank = ranks
+            .get(skill_level as usize)
+            .unwrap_or(&"Unranked")
+            .to_string();
+
+        format!("{skill_level}, {rank}")
+    } else {
+        skill_level.to_string()
+    }
+}
+
 pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
     let res = services::leetify::hall_of_fame(settings, &rank_type).await;
 
@@ -27,7 +61,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
                 .map(|(index, entry)| {
                     let username = &entry.username;
                     let pos = index_to_pos(index);
-                    let skill_level = entry.skill_level;
+                    let skill_level = skill_level_to_cs2_rank(entry.skill_level);
 
                     format!("{pos}: {username} (rating: {skill_level})")
                 })
