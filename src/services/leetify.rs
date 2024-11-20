@@ -10,20 +10,38 @@ use crate::{
     types::{SteamID, Username},
 };
 
-#[cached(result = true, time = 60)]
-async fn get_leetify_stats(steam_id: SteamID) -> Result<serde_json::Value> {
-    println!("Fetching Leetify stats for SteamID {steam_id}");
-    let url = format!("https://api.leetify.com/api/profile/{steam_id}");
-    let resp = reqwest::get(&url).await?.json().await?;
-    Ok(resp)
+fn unwrap_or_log<T, E: Display>(result: std::result::Result<T, E>, err_context: &str) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(e) => {
+            eprintln!("{err_context}: {e}");
+            None
+        }
+    }
 }
 
-#[cached(result = true, time = 60)]
-pub async fn get_leetify_mini_profile(steam_id: SteamID) -> Result<LeetifyMiniProfile> {
+#[cached(time = 300)]
+async fn get_leetify_stats(steam_id: SteamID) -> Option<serde_json::Value> {
+    println!("Fetching Leetify stats for SteamID {steam_id}");
+
+    let url = format!("https://api.leetify.com/api/profile/{steam_id}");
+    let err_context = format!("Error while fetching {url}");
+    let resp = unwrap_or_log(reqwest::get(&url).await, &err_context)?;
+    let resp = unwrap_or_log(resp.error_for_status(), &err_context)?;
+
+    unwrap_or_log(resp.json().await, &err_context)?
+}
+
+#[cached(time = 300)]
+pub async fn get_leetify_mini_profile(steam_id: SteamID) -> Option<LeetifyMiniProfile> {
     println!("Fetching Leetify mini profile for SteamID {steam_id}");
+
     let url = format!("https://api.leetify.com/api/mini-profiles/{steam_id}");
-    let resp: LeetifyMiniProfile = reqwest::get(&url).await?.json().await?;
-    Ok(resp)
+    let err_context = format!("Error while fetching {url}");
+    let resp = unwrap_or_log(reqwest::get(&url).await, &err_context)?;
+    let resp = unwrap_or_log(resp.error_for_status(), &err_context)?;
+
+    unwrap_or_log(resp.json().await, &err_context)?
 }
 
 pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<SteamID> {
@@ -208,15 +226,11 @@ pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>>
         .map(|(username, steamid)| {
             let settings = settings.clone();
 
-            // TODO: perform only the data fetching in async task
             async move {
                 let resp = get_leetify_stats(steamid.clone()).await;
 
-                let Ok(resp) = resp else {
-                    eprintln!(
-                        "Failed to fetch Leetify stats for player {username}: {:?}",
-                        resp
-                    );
+                let Some(resp) = resp else {
+                    eprintln!("Failed to fetch Leetify stats for player {username}");
 
                     return None;
                 };
@@ -277,15 +291,11 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
         .map(|(username, steamid)| {
             let rank_type = rank_type.clone();
 
-            // TODO: perform only the data fetching in async task
             async move {
                 let resp = get_leetify_mini_profile(steamid.clone()).await;
 
-                let Ok(resp) = resp else {
-                    eprintln!(
-                        "Failed to fetch Leetify mini profile for player {username}: {:?}",
-                        resp
-                    );
+                let Some(resp) = resp else {
+                    eprintln!("Failed to fetch Leetify mini profile for player {username}");
 
                     return None;
                 };
