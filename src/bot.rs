@@ -50,7 +50,15 @@ pub async fn handle_cmd(
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,
         Command::HallOfFame { rank_type } => hall_of_fame(&settings, rank_type).await,
         Command::Sahko => {
-            send_photo(&bot, &chat_id, get_sahko_inputfile().await).await;
+            let photo = match get_sahko_inputfile().await {
+                Ok(photo) => photo,
+                Err(e) => {
+                    eprintln!("Failed to fetch price chart: {}", e);
+                    return None;
+                }
+            };
+
+            send_photo(&bot, &chat_id, photo).await;
             return Some(());
         }
     };
