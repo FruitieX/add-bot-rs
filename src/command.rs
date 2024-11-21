@@ -116,6 +116,16 @@ fn matches_timed_queue(cmd: &str) -> bool {
 }
 
 fn matches_cs_map_name(cmd: &str) -> bool {
+    // Prevent odd characters in bot reply
+    if !cmd.is_ascii() {
+        return false;
+    }
+
+    // Prevent spam in bot reply
+    if cmd.len() > 32 {
+        return false;
+    }
+
     cmd.starts_with("de_") || cmd.starts_with("cs_")
 }
 
