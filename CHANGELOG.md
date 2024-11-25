@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.12.1](https://github.com/FruitieX/add-bot-rs/compare/v0.12.0...v0.12.1) (2024-11-25)
+
+
+### Bug Fixes
+
+* parse ranks correctly ([#406](https://github.com/FruitieX/add-bot-rs/issues/406)) ([5562d5c](https://github.com/FruitieX/add-bot-rs/commit/5562d5c78a1543d108610fab75c09f33a1c9ed32))
+* sahko cmd error handling ([71bf4b0](https://github.com/FruitieX/add-bot-rs/commit/71bf4b0860f644d9d680d773eb829187f11df81e))
+* sanitize cs map names ([b7847cd](https://github.com/FruitieX/add-bot-rs/commit/b7847cd4651cf2aec7c7ad0c916745a952bc9cd7))
+
 ## [0.12.0](https://github.com/FruitieX/add-bot-rs/compare/v0.11.0...v0.12.0) (2024-11-20)
 
 
