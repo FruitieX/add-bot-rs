@@ -13,7 +13,9 @@ fn index_to_pos(index: usize) -> String {
 }
 
 fn skill_level_to_cs2_rank(skill_level: u32) -> String {
+    let unranked_text = "Unranked";
     let ranks = [
+        unranked_text,
         "Silver I",
         "Silver II",
         "Silver III",
@@ -37,7 +39,7 @@ fn skill_level_to_cs2_rank(skill_level: u32) -> String {
     if skill_level < 1000 {
         let rank = ranks
             .get(skill_level as usize)
-            .unwrap_or(&"Unranked")
+            .unwrap_or(&unranked_text)
             .to_string();
 
         format!("{skill_level}, {rank}")
