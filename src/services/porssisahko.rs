@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Result};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
+use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
     prelude::{BitMapBackend, IntoDrawingArea, Rectangle},
@@ -53,7 +53,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
         FontStyle::Normal,
         include_bytes!("../../assets/Roboto-Regular.ttf"),
     )
-    .map_err(|_| anyhow!("Failed to register font"))?;
+    .map_err(|_| eyre!("Failed to register font"))?;
 
     let (
         Some(HourlyPrice { start_date, .. }),
@@ -63,7 +63,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
         }),
     ) = (prices.first(), prices.last())
     else {
-        return Err(anyhow!("No prices found"));
+        return Err(eyre!("No prices found"));
     };
 
     let start_date = start_date.with_timezone(&chrono_tz::Europe::Helsinki);
@@ -151,7 +151,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
 
     // Write to image
     let image = image::RgbImage::from_raw(width as u32, height as u32, buffer)
-        .ok_or_else(|| anyhow!("Image buffer not large enough"))?;
+        .ok_or_else(|| eyre!("Image buffer not large enough"))?;
 
     let mut bytes: Vec<u8> = Vec::new();
     image.write_to(
@@ -182,7 +182,7 @@ async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
         .rev()
         .collect();
 
-    let first = prices.first().ok_or_else(|| anyhow!("No prices found"))?;
+    let first = prices.first().ok_or_else(|| eyre!("No prices found"))?;
     let prices = [
         // Hack to workaround the API not returning prices for the first hour of
         // the day, and the chart library misaligning the x-axis labels as a

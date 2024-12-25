@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
+use color_eyre::{eyre::eyre, Result};
 use futures::StreamExt;
 use serde::Deserialize;
 use std::fmt::Display;
@@ -75,7 +75,7 @@ pub fn last_played_from_leetify_stats(
 ) -> Result<LastPlayedResult> {
     let games_field = resp
         .get("games")
-        .context("Could not find any games in Leetify response")?;
+        .ok_or_else(|| eyre!("Could not find any games in Leetify response"))?;
     let games = serde_json::from_value::<Vec<LeetifyGame>>(games_field.clone())?;
 
     let team_steam_ids: Vec<&SteamID> = settings
@@ -99,7 +99,7 @@ pub fn last_played_from_leetify_stats(
     let last_played_with_teammate = games_with_teammates
         .iter()
         .max_by_key(|game| game.game_finished_at)
-        .context("Could not find any games played with teammates")
+        .ok_or_else(|| eyre!("Could not find any games played with teammates"))
         .cloned()?;
 
     games_with_teammates.dedup_by_key(|g| g.game_finished_at.date_naive());
@@ -134,11 +134,11 @@ pub fn last_played_from_leetify_stats(
 
 pub async fn last_played(settings: &Settings, username: &Username) -> Result<LeetifyGame> {
     let steamid = steamid_for_username(settings.clone(), username)
-        .context(format!("No SteamID configured for user {username}"))?;
+        .ok_or_else(|| eyre!(format!("No SteamID configured for user {username}")))?;
 
     let resp = get_leetify_stats(steamid.clone())
         .await
-        .context("Failed to fetch last played stats from Leetify")?;
+        .ok_or_else(|| eyre!("Failed to fetch last played stats from Leetify"))?;
 
     let result = last_played_from_leetify_stats(settings, &steamid, &resp)?;
 
@@ -203,11 +203,11 @@ pub struct LeetifyMiniProfile {
 
 pub async fn player_stats(settings: &Settings, username: &Username) -> Result<LeetifyMiniProfile> {
     let steamid = steamid_for_username(settings.clone(), username)
-        .context(format!("No SteamID configured for user {username}"))?;
+        .ok_or_else(|| eyre!(format!("No SteamID configured for user {username}")))?;
 
     let mini_profile = get_leetify_mini_profile(steamid.clone())
         .await
-        .context("Failed to fetch Leetify mini profile")?;
+        .ok_or_else(|| eyre!("Failed to fetch last played stats from Leetify"))?;
 
     Ok(mini_profile)
 }
