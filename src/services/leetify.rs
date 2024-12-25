@@ -1,6 +1,6 @@
-use color_eyre::{eyre::eyre, Result};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
+use color_eyre::{eyre::eyre, Result};
 use futures::StreamExt;
 use serde::Deserialize;
 use std::fmt::Display;

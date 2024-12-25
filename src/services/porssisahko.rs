@@ -1,7 +1,7 @@
-use color_eyre::{eyre::eyre, Result};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
+use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
     prelude::{BitMapBackend, IntoDrawingArea, Rectangle},

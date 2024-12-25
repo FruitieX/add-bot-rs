@@ -1,7 +1,7 @@
 use crate::state_container::StateContainer;
-use color_eyre::Result;
 use chrono_tz::Tz;
 use clap::Parser;
+use color_eyre::Result;
 use teloxide::{types::Message, utils::client_from_env, Bot};
 
 mod bot;
