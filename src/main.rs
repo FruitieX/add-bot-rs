@@ -1,5 +1,5 @@
 use crate::state_container::StateContainer;
-use anyhow::Result;
+use color_eyre::Result;
 use chrono_tz::Tz;
 use clap::Parser;
 use teloxide::{types::Message, utils::client_from_env, Bot};
@@ -23,6 +23,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    color_eyre::install()?;
     let settings = settings::read_settings()?;
 
     // Try restoring state from file, or default to empty state.
