@@ -24,7 +24,7 @@ fn unwrap_or_log<T, E: Display>(result: std::result::Result<T, E>, err_context: 
 async fn get_leetify_stats(steam_id: SteamID) -> Option<serde_json::Value> {
     println!("Fetching Leetify stats for SteamID {steam_id}");
 
-    let url = format!("https://api.leetify.com/api/profile/{steam_id}");
+    let url = format!("https://api.cs-prod.leetify.com/api/profile/id/{steam_id}");
     let err_context = format!("Error while fetching {url}");
     let resp = unwrap_or_log(reqwest::get(&url).await, &err_context)?;
     let resp = unwrap_or_log(resp.error_for_status(), &err_context)?;
@@ -36,7 +36,7 @@ async fn get_leetify_stats(steam_id: SteamID) -> Option<serde_json::Value> {
 pub async fn get_leetify_mini_profile(steam_id: SteamID) -> Option<LeetifyMiniProfile> {
     println!("Fetching Leetify mini profile for SteamID {steam_id}");
 
-    let url = format!("https://api.leetify.com/api/mini-profiles/{steam_id}");
+    let url = format!("https://api.cs-prod.leetify.com/api/mini-profiles/{steam_id}");
     let err_context = format!("Error while fetching {url}");
     let resp = unwrap_or_log(reqwest::get(&url).await, &err_context)?;
     let resp = unwrap_or_log(resp.error_for_status(), &err_context)?;
