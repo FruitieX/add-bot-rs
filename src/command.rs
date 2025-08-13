@@ -19,6 +19,8 @@ The following commands are supported:
 - /stats        Leetify stats for player.
 - /halloffame   Top 10 players by skill level.
 - /hallofshame  Top 10 players by last played date.
+- /temperature  Current temperature for configured location.
+- /weather      Weather for configured location.
 ```Most commands accept an optional `@username` argument, which defaults to yourself."
     );
 }
@@ -56,6 +58,12 @@ pub enum Command {
     HallOfFame {
         rank_type: String,
     },
+
+    /// Current temperature for configured location
+    Temperature,
+
+    /// Weather for configured location
+    Weather,
 
     // Get the latest electricity prices as a chart
     Sahko,
@@ -116,12 +124,7 @@ fn matches_timed_queue(cmd: &str) -> bool {
 
 fn matches_cs_map_name(cmd: &str) -> bool {
     // Prevent odd characters in bot reply
-    if !cmd.is_ascii() {
-        return false;
-    }
-
-    // Prevent spam in bot reply
-    if cmd.len() > 32 {
+    if (!cmd.is_ascii()) || cmd.len() > 32 {
         return false;
     }
 
@@ -171,6 +174,8 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                     rank_type: "premier".to_string(),
                 })
             }
+            "temperature" => Some(Command::Temperature),
+            "weather" => Some(Command::Weather),
             "sahko" | "el" | "elpriser" => Some(Command::Sahko),
 
             "wingman" => Some(Command::HallOfFame {

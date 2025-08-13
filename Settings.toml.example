@@ -6,3 +6,10 @@ bot_api_token = "<telegram bot API token here>"
 "tg_nick1" = "76561191234567891"
 "tg_nick2" = "76561191234567892"
 "tg_nick3" = "76561191234567893"
+
+# Weather support is enabled when this section is present.
+# Remove the [weather] section to disable.
+[weather]
+latitude = 60.1719
+longitude = 24.9414
+display_name = "Helsinki, FI"

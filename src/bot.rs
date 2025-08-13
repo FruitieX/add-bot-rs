@@ -4,6 +4,7 @@ use crate::{
         queue::{add_remove, list, remove_all},
         sahko::get_sahko_inputfile,
         stats::{hall_of_fame, hall_of_shame, last_played, stats},
+        weather::{temperature, weather as weather_report},
     },
     settings::Settings,
     state_container::StateContainer,
@@ -49,6 +50,8 @@ pub async fn handle_cmd(
         }
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,
         Command::HallOfFame { rank_type } => hall_of_fame(&settings, rank_type).await,
+        Command::Temperature => temperature().await,
+        Command::Weather => weather_report().await,
         Command::Sahko => {
             let photo = match get_sahko_inputfile().await {
                 Ok(photo) => photo,

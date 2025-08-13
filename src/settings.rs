@@ -10,14 +10,29 @@ pub struct TeloxideSettings {
 }
 
 #[derive(Clone, Deserialize, Debug)]
+
 pub struct PlayersSettings {
     pub steamid_mappings: HashMap<Username, SteamID>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
+
+pub struct WeatherSettings {
+    pub latitude: f64,
+
+    pub longitude: f64,
+
+    pub display_name: String,
+}
+
+#[derive(Clone, Deserialize, Debug)]
+
 pub struct Settings {
     pub teloxide: TeloxideSettings,
+
     pub players: PlayersSettings,
+
+    pub weather: Option<WeatherSettings>,
 }
 
 pub fn read_settings() -> Result<Settings, config::ConfigError> {
