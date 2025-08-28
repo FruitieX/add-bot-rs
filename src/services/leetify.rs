@@ -338,7 +338,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
 
     if rank_type == "premier" {
         // Don't include players with old CSGO premier rank
-        entries.retain(|entry| entry.skill_level > 1000);
+        entries.retain(|entry| entry.skill_level >= 1000);
     }
 
     entries.sort_by_key(|entry| entry.skill_level);
