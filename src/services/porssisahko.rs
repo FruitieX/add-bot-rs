@@ -38,7 +38,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
         .flat_map(|hp| {
             [*hp, {
                 let mut hp = *hp;
-                hp.start_date += Duration::hours(1) - Duration::nanoseconds(1);
+                hp.start_date += Duration::minutes(15) - Duration::nanoseconds(1);
                 hp
             }]
         })
@@ -167,7 +167,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
 #[cached(result = true, time = 60)]
 async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
     println!("Fetching latest sahko prices");
-    let url = "https://api.porssisahko.net/v1/latest-prices.json";
+    let url = "https://api.porssisahko.net/v2/latest-prices.json";
     let resp: PricesResult = reqwest::get(url).await?.json().await?;
 
     // For some reason the API returns the prices in reverse order
