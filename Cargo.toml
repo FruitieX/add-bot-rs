@@ -40,6 +40,6 @@ plotters = { version = "=0.3.7", default-features = false, features = [
     "bitmap_backend",
     # "svg_backend",
     "chrono",
-    "line_series",
+    "area_series",
 ] }
 image = { version = "=0.25.8", features = ["png"] }

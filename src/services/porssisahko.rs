@@ -5,7 +5,7 @@ use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
     prelude::{BitMapBackend, IntoDrawingArea, Rectangle},
-    series::LineSeries,
+    series::AreaSeries,
     style::{self, register_font, Color, FontStyle, IntoFont, BLACK, BLUE, RED, WHITE},
 };
 use serde::Deserialize;
@@ -115,15 +115,19 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .y_max_light_lines(2)
             .draw()?;
 
-        ctx.draw_series(LineSeries::new(
-            prices.iter().map(|hp| {
-                (
-                    hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
-                    hp.price,
-                )
-            }),
-            &BLUE,
-        ))?;
+        ctx.draw_series(
+            AreaSeries::new(
+                prices.iter().map(|hp| {
+                    (
+                        hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
+                        hp.price,
+                    )
+                }),
+                0.0,
+                BLUE.mix(0.2),
+            )
+            .border_style(BLUE),
+        )?;
 
         let cur_price_line_thickness = Duration::minutes(6);
 
