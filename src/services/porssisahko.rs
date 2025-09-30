@@ -26,6 +26,10 @@ fn fmt_y_axis(y: &f32) -> String {
 pub async fn get_price_chart() -> Result<Vec<u8>> {
     // Get prices
     let prices = get_latest_prices().await?;
+
+    // We remove 3 hours * 4 15-minute prices to align the chart more nicely.
+    let prices: Vec<HourlyPrice> = prices.into_iter().skip(12).collect();
+
     let max_price = prices
         .iter()
         .fold(f32::NEG_INFINITY, |a, &b| a.max(b.price))
@@ -181,19 +185,6 @@ async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
         // })
         .rev()
         .collect();
-
-    let first = prices.first().ok_or_else(|| eyre!("No prices found"))?;
-    let prices = [
-        // Hack to workaround the API not returning prices for the first hour of
-        // the day, and the chart library misaligning the x-axis labels as a
-        // result.
-        vec![HourlyPrice {
-            price: first.price,
-            start_date: first.start_date - chrono::Duration::hours(1),
-        }],
-        prices,
-    ]
-    .concat();
 
     Ok(prices)
 }
