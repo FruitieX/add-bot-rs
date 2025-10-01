@@ -1,3 +1,5 @@
+use std::cmp::{max, min};
+
 use cached::proc_macro::cached;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
@@ -5,8 +7,7 @@ use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
     prelude::{BitMapBackend, IntoDrawingArea, Rectangle},
-    series::LineSeries,
-    style::{self, register_font, Color, FontStyle, IntoFont, BLACK, BLUE, RED, WHITE},
+    style::{self, register_font, Color, FontStyle, IntoFont, RGBColor, BLACK, RED, WHITE},
 };
 use serde::Deserialize;
 
@@ -26,23 +27,15 @@ fn fmt_y_axis(y: &f32) -> String {
 pub async fn get_price_chart() -> Result<Vec<u8>> {
     // Get prices
     let prices = get_latest_prices().await?;
+
+    // We remove 3 hours * 4 15-minute prices to align the chart more nicely.
+    let prices: Vec<HourlyPrice> = prices.into_iter().skip(12).collect();
+
     let max_price = prices
         .iter()
         .fold(f32::NEG_INFINITY, |a, &b| a.max(b.price))
         .max(10.);
     let min_price = prices.iter().fold(0.0f32, |a, &b| a.min(b.price));
-
-    // Simulate a bar chart
-    let prices = prices
-        .iter()
-        .flat_map(|hp| {
-            [*hp, {
-                let mut hp = *hp;
-                hp.start_date += Duration::minutes(15) - Duration::nanoseconds(1);
-                hp
-            }]
-        })
-        .collect::<Vec<_>>();
 
     // Generate a chart
     let width: usize = 1024;
@@ -115,15 +108,50 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .y_max_light_lines(2)
             .draw()?;
 
-        ctx.draw_series(LineSeries::new(
-            prices.iter().map(|hp| {
-                (
-                    hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
-                    hp.price,
-                )
-            }),
-            &BLUE,
-        ))?;
+        ctx.draw_series(prices.iter().map(|hp| {
+            Rectangle::new(
+                [
+                    (
+                        hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
+                        0.0,
+                    ),
+                    (
+                        (hp.start_date + Duration::minutes(15))
+                            .with_timezone(&chrono_tz::Europe::Helsinki),
+                        hp.price,
+                    ),
+                ],
+                {
+                    let gradient = colorous::VIRIDIS;
+
+                    // We scale up the prices from 0.xx cents to something more usize friendly, as we need
+                    // that later to get the color gradient.
+                    let scale_up = 100;
+                    let current_price = (hp.price * scale_up as f32) as usize;
+
+                    // We "push" values up a bit artificially, so that we can avoid the first part of the color gradient.
+                    let tulttans_constant = 0.2;
+
+                    // This determins how dark the darkest price is. In the future, it could maybe be based on the
+                    // highest price of the day?
+                    let max_price: f32 = (30 * scale_up) as f32;
+                    let tulttans_max_price = (max_price * (1.0 + tulttans_constant)) as usize;
+
+                    // We "push" values up a bit artificially, so that we can avoid the first part of the color gradient.
+                    let tulttans_fix_to_avoid_spy_color = (tulttans_constant * max_price) as usize;
+
+                    let cor = gradient.eval_rational(
+                        tulttans_max_price
+                            - min(
+                                max(current_price, 0) + tulttans_fix_to_avoid_spy_color,
+                                tulttans_max_price,
+                            ),
+                        tulttans_max_price,
+                    );
+                    RGBColor(cor.r, cor.g, cor.b).filled()
+                },
+            )
+        }))?;
 
         let cur_price_line_thickness = Duration::minutes(6);
 
@@ -181,19 +209,6 @@ async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
         // })
         .rev()
         .collect();
-
-    let first = prices.first().ok_or_else(|| eyre!("No prices found"))?;
-    let prices = [
-        // Hack to workaround the API not returning prices for the first hour of
-        // the day, and the chart library misaligning the x-axis labels as a
-        // result.
-        vec![HourlyPrice {
-            price: first.price,
-            start_date: first.start_date - chrono::Duration::hours(1),
-        }],
-        prices,
-    ]
-    .concat();
 
     Ok(prices)
 }
