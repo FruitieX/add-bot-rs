@@ -174,6 +174,32 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             ),
         ])?;
 
+        // Draw some extra ticks on the x-axis for each hour.
+        let hour_tick_thickness = Duration::minutes(3);
+        let hour_tick_height = max_price / 100.0;
+
+        ctx.draw_series(
+            prices
+                .iter()
+                .filter(|hp| hp.start_date.minute() == 0)
+                .map(|hp| {
+                    Rectangle::new(
+                        [
+                            (
+                                hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
+                                hour_tick_height,
+                            ),
+                            (
+                                (hp.start_date + hour_tick_thickness)
+                                    .with_timezone(&chrono_tz::Europe::Helsinki),
+                                0.0 - hour_tick_height,
+                            ),
+                        ],
+                        BLACK.filled(),
+                    )
+                }),
+        )?;
+
         root.present()?;
     }
 
