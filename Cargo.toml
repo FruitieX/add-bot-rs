@@ -43,4 +43,4 @@ plotters = { version = "=0.3.7", default-features = false, features = [
     "line_series",
 ] }
 image = { version = "=0.25.8", features = ["png"] }
-colorous = "1.0.16"
+colorous = "=1.0.16"
