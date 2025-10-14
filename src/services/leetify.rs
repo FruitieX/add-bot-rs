@@ -21,7 +21,7 @@ fn unwrap_or_log<T, E: Display>(result: std::result::Result<T, E>, err_context: 
 }
 
 #[cached(time = 300)]
-async fn get_leetify_stats(steam_id: SteamID) -> Option<serde_json::Value> {
+pub(crate) async fn get_leetify_stats(steam_id: SteamID) -> Option<serde_json::Value> {
     println!("Fetching Leetify stats for SteamID {steam_id}");
 
     let url = format!("https://api.cs-prod.leetify.com/api/profile/id/{steam_id}");
