@@ -121,40 +121,85 @@ pub async fn get_activity_chart(
         cur = cur.succ_opt().unwrap();
     }
 
-    // Build daily participants from all games to capture all players in team games
+    // Build daily participants - behavior changes based on filter_user
     let mut daily_participants: HashMap<NaiveDate, HashSet<String>> = HashMap::new();
     let mut seen_global_games: HashSet<String> = HashSet::new();
 
-    // Process all games to find participants for each day
-    for (_username, games) in per_player_games.iter() {
-        for g in games.iter() {
-            let key = format!(
-                "{}:{}:{}-{}",
-                g.game_finished_at.timestamp(),
-                g.map_name,
-                g.scores.0,
-                g.scores.1
-            );
-            let d = g.game_finished_at.date_naive();
+    if let Some(filtered_user) = filter_user {
+        // When filtering by user, only track games where the filtered user participated
+        // and show their teammates
+        let filtered_username = filtered_user.to_string();
 
-            if d >= start && d <= today && seen_global_games.insert(key.clone()) {
-                // For each unique game, find ALL configured players who participated
-                for (other_username, other_games) in per_player_games.iter() {
-                    for other_game in other_games.iter() {
-                        let other_key = format!(
-                            "{}:{}:{}-{}",
-                            other_game.game_finished_at.timestamp(),
-                            other_game.map_name,
-                            other_game.scores.0,
-                            other_game.scores.1
-                        );
+        if let Some((_, filtered_games)) = per_player_games
+            .iter()
+            .find(|(username, _)| *username == filtered_username)
+        {
+            for g in filtered_games.iter() {
+                let key = format!(
+                    "{}:{}:{}-{}",
+                    g.game_finished_at.timestamp(),
+                    g.map_name,
+                    g.scores.0,
+                    g.scores.1
+                );
+                let d = g.game_finished_at.date_naive();
 
-                        // Same game - this player participated
-                        if key == other_key {
-                            daily_participants
-                                .entry(d)
-                                .or_insert_with(HashSet::new)
-                                .insert(other_username.clone());
+                if d >= start && d <= today && seen_global_games.insert(key.clone()) {
+                    // Find ALL configured players who participated in this game with the filtered user
+                    for (other_username, other_games) in per_player_games.iter() {
+                        for other_game in other_games.iter() {
+                            let other_key = format!(
+                                "{}:{}:{}-{}",
+                                other_game.game_finished_at.timestamp(),
+                                other_game.map_name,
+                                other_game.scores.0,
+                                other_game.scores.1
+                            );
+
+                            // Same game - this player was a teammate
+                            if key == other_key && *other_username != filtered_username {
+                                daily_participants
+                                    .entry(d)
+                                    .or_default()
+                                    .insert(other_username.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Original logic for global view
+        for (_username, games) in per_player_games.iter() {
+            for g in games.iter() {
+                let key = format!(
+                    "{}:{}:{}-{}",
+                    g.game_finished_at.timestamp(),
+                    g.map_name,
+                    g.scores.0,
+                    g.scores.1
+                );
+                let d = g.game_finished_at.date_naive();
+
+                if d >= start && d <= today && seen_global_games.insert(key.clone()) {
+                    // For each unique game, find ALL configured players who participated
+                    for (other_username, other_games) in per_player_games.iter() {
+                        for other_game in other_games.iter() {
+                            let other_key = format!(
+                                "{}:{}:{}-{}",
+                                other_game.game_finished_at.timestamp(),
+                                other_game.map_name,
+                                other_game.scores.0,
+                                other_game.scores.1
+                            );
+
+                            // Same game - this player participated
+                            if key == other_key {
+                                daily_participants
+                                    .entry(d)
+                                    .or_default()
+                                    .insert(other_username.clone());
+                            }
                         }
                     }
                 }
@@ -296,24 +341,43 @@ pub async fn get_activity_chart(
                 ))?;
             }
         }
-        // Calculate total games per player for sorting
-        let mut player_totals: Vec<(String, u32)> = per_player_daily
-            .iter()
-            .map(|(username, daily_counts)| {
-                let total = daily_counts.values().sum::<u32>();
-                (username.clone(), total)
-            })
-            .collect();
+        // Calculate teammate frequency for filtered user or global player totals
+        let top_players: Vec<String> = if let Some(_filtered_user) = filter_user {
+            // When filtering, show teammates ordered by how often they played with the filtered user
+            let mut teammate_counts: HashMap<String, u32> = HashMap::new();
 
-        // Sort players by total games (descending)
-        player_totals.sort_by(|a, b| b.1.cmp(&a.1));
+            for participants in daily_participants.values() {
+                for teammate in participants.iter() {
+                    *teammate_counts.entry(teammate.clone()).or_insert(0) += 1;
+                }
+            }
 
-        // Take top 10 players
-        let top_players: Vec<String> = player_totals
-            .iter()
-            .take(10)
-            .map(|(name, _)| name.clone())
-            .collect();
+            let mut teammate_totals: Vec<(String, u32)> = teammate_counts.into_iter().collect();
+            teammate_totals.sort_by(|a, b| b.1.cmp(&a.1));
+
+            teammate_totals
+                .iter()
+                .take(10)
+                .map(|(name, _)| name.clone())
+                .collect()
+        } else {
+            // Original logic for global view - top players by total games
+            let mut player_totals: Vec<(String, u32)> = per_player_daily
+                .iter()
+                .map(|(username, daily_counts)| {
+                    let total = daily_counts.values().sum::<u32>();
+                    (username.clone(), total)
+                })
+                .collect();
+
+            player_totals.sort_by(|a, b| b.1.cmp(&a.1));
+
+            player_totals
+                .iter()
+                .take(10)
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
 
         let palette = colorous::TABLEAU10;
         let others_color = RGBColor(128, 128, 128);
@@ -325,7 +389,7 @@ pub async fn get_activity_chart(
                 continue;
             }
 
-            // Get all players who participated in team games on this day
+            // Get participants for this day - behavior depends on filter
             let participants_this_day = daily_participants.get(d);
             let mut players_that_day: Vec<String> = Vec::new();
             let mut has_others_that_day = false;
@@ -344,6 +408,8 @@ pub async fn get_activity_chart(
                 }
             }
 
+            // For filtered users, if no teammates found, skip this day
+            // For global view, if no players found, skip this day
             if players_that_day.is_empty() {
                 continue;
             }
@@ -405,18 +471,31 @@ pub async fn get_activity_chart(
                     rgb,
                 )))?
                 .label(player_name.clone())
-                .legend(move |(x, y)| Rectangle::new([(x, y - 10), (x + 15, y + 5)], rgb.filled()));
+                .legend(move |(x, y)| Rectangle::new([(x, y - 15), (x + 15, y + 5)], rgb.filled()));
             }
 
-            // Add others if there are players beyond top 10
-            if player_totals.len() > 10 {
+            // Add others if there are more players/teammates than can be shown
+            let has_others = if filter_user.is_some() {
+                // For filtered view, check if there are more than 10 unique teammates
+                let total_teammates: HashSet<String> = daily_participants
+                    .values()
+                    .flat_map(|participants| participants.iter())
+                    .cloned()
+                    .collect();
+                total_teammates.len() > 10
+            } else {
+                // For global view, check if there are more than 10 players
+                per_player_daily.len() > 10
+            };
+
+            if has_others {
                 ctx.draw_series(std::iter::once(Rectangle::new(
                     [(start, 0.), (start, 0.)],
                     others_color,
                 )))?
                 .label("Others".to_string())
                 .legend(move |(x, y)| {
-                    Rectangle::new([(x, y - 10), (x + 15, y + 5)], others_color.filled())
+                    Rectangle::new([(x, y - 15), (x + 15, y + 5)], others_color.filled())
                 });
             }
 
