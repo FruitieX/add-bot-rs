@@ -1,6 +1,7 @@
 use crate::{
     command::Command,
     commands::{
+        activity::get_activity_inputfile,
         queue::{add_remove, list, remove_all},
         sahko::get_sahko_inputfile,
         stats::{hall_of_fame, hall_of_shame, last_played, stats},
@@ -57,6 +58,18 @@ pub async fn handle_cmd(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch price chart: {}", e);
+                    return None;
+                }
+            };
+
+            send_photo(&bot, &chat_id, photo).await;
+            return Some(());
+        }
+        Command::Activity { for_user } => {
+            let photo = match get_activity_inputfile(&settings, for_user.as_ref()).await {
+                Ok(photo) => photo,
+                Err(e) => {
+                    eprintln!("Failed to fetch activity chart: {}", e);
                     return None;
                 }
             };

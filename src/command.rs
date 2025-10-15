@@ -19,6 +19,7 @@ The following commands are supported:
 - /stats        Leetify stats for player.
 - /halloffame   Top 10 players by skill level.
 - /hallofshame  Top 10 players by last played date.
+ - /activity    Daily games played by all players (last 365 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
 ```Most commands accept an optional `@username` argument, which defaults to yourself."
@@ -64,6 +65,11 @@ pub enum Command {
 
     /// Weather for configured location
     Weather,
+
+    /// Daily games played chart for last 365 days (optionally filter by @username)
+    Activity {
+        for_user: Option<Username>,
+    },
 
     // Get the latest electricity prices as a chart
     Sahko,
@@ -177,6 +183,11 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "temperature" => Some(Command::Temperature),
             "weather" => Some(Command::Weather),
             "sahko" | "el" | "elpriser" => Some(Command::Sahko),
+
+            "activity" | "games" | "played" | "daily" => {
+                let for_user = args.and_then(parse_username_arg);
+                Some(Command::Activity { for_user })
+            }
 
             "wingman" => Some(Command::HallOfFame {
                 rank_type: "wingman".to_string(),
