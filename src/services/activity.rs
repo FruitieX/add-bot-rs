@@ -122,18 +122,22 @@ pub async fn get_activity_chart(
     }
 
     // Build daily participants - behavior changes based on filter_user
+    // Map date -> set of participating configured usernames (including filtered user when in filtered mode)
     let mut daily_participants: HashMap<NaiveDate, HashSet<String>> = HashMap::new();
     let mut seen_global_games: HashSet<String> = HashSet::new();
 
     if let Some(filtered_user) = filter_user {
         // When filtering by user, only track games where the filtered user participated
-        // and show their teammates
+        // and show their teammates (and the filtered user themselves)
         let filtered_username = filtered_user.to_string();
 
         if let Some((_, filtered_games)) = per_player_games
             .iter()
             .find(|(username, _)| *username == filtered_username)
         {
+            // For counting how many unique games filtered user had in timeframe
+            let mut filtered_seen: HashSet<String> = HashSet::new();
+
             for g in filtered_games.iter() {
                 let key = format!(
                     "{}:{}:{}-{}",
@@ -145,6 +149,15 @@ pub async fn get_activity_chart(
                 let d = g.game_finished_at.date_naive();
 
                 if d >= start && d <= today && seen_global_games.insert(key.clone()) {
+                    // Add the filtered user into the day's participants
+                    daily_participants
+                        .entry(d)
+                        .or_default()
+                        .insert(filtered_username.clone());
+
+                    // Count this game for filtered user
+                    filtered_seen.insert(key.clone());
+
                     // Find ALL configured players who participated in this game with the filtered user
                     for (other_username, other_games) in per_player_games.iter() {
                         for other_game in other_games.iter() {
@@ -209,10 +222,10 @@ pub async fn get_activity_chart(
 
     // Per-player daily (unique games per player)
     let mut per_player_daily: Vec<(String, HashMap<NaiveDate, u32>)> = Vec::new();
-    for (username, games) in per_player_games.into_iter() {
+    for (username, games) in per_player_games.iter() {
         let mut map: HashMap<NaiveDate, u32> = HashMap::new();
         let mut seen_player: HashSet<String> = HashSet::new();
-        for g in games.into_iter() {
+        for g in games.iter() {
             let key = format!(
                 "{}:{}:{}-{}",
                 g.game_finished_at.timestamp(),
@@ -220,7 +233,7 @@ pub async fn get_activity_chart(
                 g.scores.0,
                 g.scores.1
             );
-            if !seen_player.insert(key) {
+            if !seen_player.insert(key.clone()) {
                 continue;
             }
             let d = g.game_finished_at.date_naive();
@@ -230,10 +243,10 @@ pub async fn get_activity_chart(
         }
         // Only retain per-player daily if no filter or this is the filtered user
         if filter_user
-            .map(|fu| fu.to_string() == username)
+            .map(|fu| fu.to_string() == *username)
             .unwrap_or(true)
         {
-            per_player_daily.push((username, map));
+            per_player_daily.push((username.clone(), map));
         }
     }
 
@@ -266,7 +279,7 @@ pub async fn get_activity_chart(
         root.fill(&WHITE)?;
 
         let caption = if let Some(u) = filter_user {
-            format!("Games played per day — {u} (last {span_days} days)")
+            format!("Games played per day with {u} (last {span_days} days)")
         } else {
             format!("Games played per day (last {span_days} days)")
         };
@@ -341,25 +354,68 @@ pub async fn get_activity_chart(
                 ))?;
             }
         }
-        // Calculate teammate frequency for filtered user or global player totals
-        let top_players: Vec<String> = if let Some(_filtered_user) = filter_user {
-            // When filtering, show teammates ordered by how often they played with the filtered user
-            let mut teammate_counts: HashMap<String, u32> = HashMap::new();
 
-            for participants in daily_participants.values() {
-                for teammate in participants.iter() {
-                    *teammate_counts.entry(teammate.clone()).or_insert(0) += 1;
+        // Calculate teammate frequency for filtered user or global player totals
+        // Build a map of username -> set of unique game keys (within timeframe) so we can compute
+        // intersections per game (avoids double-counting and matches per-player unique-game counts)
+        let mut player_keys_map: HashMap<String, HashSet<String>> = HashMap::new();
+        for (username, games) in per_player_games.iter() {
+            let mut keys: HashSet<String> = HashSet::new();
+            for g in games.iter() {
+                let d = g.game_finished_at.date_naive();
+                if d < start || d > today {
+                    continue;
+                }
+                let key = format!(
+                    "{}:{}:{}-{}",
+                    g.game_finished_at.timestamp(),
+                    g.map_name,
+                    g.scores.0,
+                    g.scores.1
+                );
+                keys.insert(key);
+            }
+            player_keys_map.insert(username.clone(), keys);
+        }
+
+        // top_players_with_counts: Vec<(username, count)>
+        let top_players_with_counts: Vec<(String, u32)> = if let Some(filtered_user) = filter_user {
+            // When filtering, compute counts per GAME (not per day). Show teammates ordered by how
+            // often they played in the same game as the filtered user. Include the filtered user
+            // themself first with their total number of unique games in timeframe.
+            let filtered_username = filtered_user.to_string();
+
+            let filtered_set = player_keys_map
+                .get(&filtered_username)
+                .cloned()
+                .unwrap_or_default();
+            let filtered_games_count = filtered_set.len() as u32;
+
+            // For each other player, compute intersection size with filtered_set
+            let mut teammate_totals: Vec<(String, u32)> = Vec::new();
+            for (other_username, other_set) in player_keys_map.iter() {
+                if other_username == &filtered_username {
+                    continue;
+                }
+                let mut inter: u32 = 0;
+                for k in filtered_set.iter() {
+                    if other_set.contains(k) {
+                        inter += 1;
+                    }
+                }
+                if inter > 0 {
+                    teammate_totals.push((other_username.clone(), inter));
                 }
             }
-
-            let mut teammate_totals: Vec<(String, u32)> = teammate_counts.into_iter().collect();
             teammate_totals.sort_by(|a, b| b.1.cmp(&a.1));
 
-            teammate_totals
-                .iter()
-                .take(10)
-                .map(|(name, _)| name.clone())
-                .collect()
+            // Build vector including filtered user first
+            let mut v: Vec<(String, u32)> = Vec::new();
+            v.push((filtered_username.clone(), filtered_games_count));
+            for (name, cnt) in teammate_totals.into_iter().take(9) {
+                v.push((name, cnt));
+            }
+            v
         } else {
             // Original logic for global view - top players by total games
             let mut player_totals: Vec<(String, u32)> = per_player_daily
@@ -372,12 +428,14 @@ pub async fn get_activity_chart(
 
             player_totals.sort_by(|a, b| b.1.cmp(&a.1));
 
-            player_totals
-                .iter()
-                .take(10)
-                .map(|(name, _)| name.clone())
-                .collect()
+            player_totals.into_iter().take(10).collect()
         };
+
+        // Build a helper vector of top names for quick lookup and mapping index -> name
+        let top_names: Vec<String> = top_players_with_counts
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
 
         let palette = colorous::TABLEAU10;
         let others_color = RGBColor(128, 128, 128);
@@ -396,7 +454,7 @@ pub async fn get_activity_chart(
 
             if let Some(participants) = participants_this_day {
                 for participant in participants.iter() {
-                    if top_players.contains(participant) {
+                    if top_names.contains(participant) {
                         players_that_day.push(participant.clone());
                     } else {
                         has_others_that_day = true;
@@ -414,15 +472,15 @@ pub async fn get_activity_chart(
                 continue;
             }
 
-            // Sort players by their position in top_players list for consistent order
+            // Sort players by their position in top_names list for consistent order
             players_that_day.sort_by(|a, b| {
                 if a == "Others" {
                     std::cmp::Ordering::Greater // Others goes last
                 } else if b == "Others" {
                     std::cmp::Ordering::Less
                 } else {
-                    let idx_a = top_players.iter().position(|p| p == a).unwrap_or(999);
-                    let idx_b = top_players.iter().position(|p| p == b).unwrap_or(999);
+                    let idx_a = top_names.iter().position(|p| p == a).unwrap_or(999);
+                    let idx_b = top_names.iter().position(|p| p == b).unwrap_or(999);
                     idx_a.cmp(&idx_b)
                 }
             });
@@ -437,7 +495,7 @@ pub async fn get_activity_chart(
             for username in players_that_day.into_iter() {
                 let rgb = if username == "Others" {
                     others_color
-                } else if let Some(color_idx) = top_players.iter().position(|p| p == &username) {
+                } else if let Some(color_idx) = top_names.iter().position(|p| p == &username) {
                     let color = palette[color_idx % palette.len()];
                     RGBColor(color.r, color.g, color.b)
                 } else {
@@ -459,33 +517,46 @@ pub async fn get_activity_chart(
             }
         }
 
-        // Draw legend for top players + others
-        if !top_players.is_empty() {
-            // Add top players to legend
-            for (idx, player_name) in top_players.iter().enumerate() {
+        // Draw legend for top players + others (with counts)
+        if !top_players_with_counts.is_empty() {
+            // Add top players to legend (show count in label)
+            for (idx, (player_name, cnt)) in top_players_with_counts.iter().enumerate() {
                 let color = palette[idx % palette.len()];
                 let rgb = RGBColor(color.r, color.g, color.b);
+                let label_text = format!("{} ({})", player_name, cnt);
 
+                // Draw an invisible series to register legend entry with label_text
                 ctx.draw_series(std::iter::once(Rectangle::new(
                     [(start, 0.), (start, 0.)],
                     rgb,
                 )))?
-                .label(player_name.clone())
+                .label(label_text.clone())
                 .legend(move |(x, y)| Rectangle::new([(x, y - 15), (x + 15, y + 5)], rgb.filled()));
             }
 
             // Add others if there are more players/teammates than can be shown
             let has_others = if filter_user.is_some() {
-                // For filtered view, check if there are more than 10 unique teammates
+                // For filtered view, check if total unique participants (excluding filtered user) > shown teammates
                 let total_teammates: HashSet<String> = daily_participants
                     .values()
-                    .flat_map(|participants| participants.iter())
-                    .cloned()
+                    .flat_map(|participants| {
+                        participants
+                            .iter()
+                            .filter(|p| **p != filter_user.unwrap().to_string())
+                            .cloned()
+                            .collect::<Vec<String>>()
+                    })
                     .collect();
-                total_teammates.len() > 10
+                // We showed up to 9 teammates + 1 filtered user = up to 10 entries
+                total_teammates.len() + 1 > top_players_with_counts.len()
             } else {
-                // For global view, check if there are more than 10 players
-                per_player_daily.len() > 10
+                // For global view, check if there are more than top count players
+                // compute total unique players participating in timeframe
+                let total_players: HashSet<String> = daily_participants
+                    .values()
+                    .flat_map(|participants| participants.iter().cloned().collect::<Vec<String>>())
+                    .collect();
+                total_players.len() > top_players_with_counts.len()
             };
 
             if has_others {

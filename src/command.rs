@@ -19,7 +19,7 @@ The following commands are supported:
 - /stats        Leetify stats for player.
 - /halloffame   Top 10 players by skill level.
 - /hallofshame  Top 10 players by last played date.
- - /activity    Daily games played by all players (last 365 days).
+- /activity     Daily games played by all players (last 365 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
 ```Most commands accept an optional `@username` argument, which defaults to yourself."
