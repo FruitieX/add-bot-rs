@@ -5,7 +5,11 @@ use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
     prelude::{BitMapBackend, IntoDrawingArea, LineSeries, Rectangle, Text},
-    style::{self, register_font, text_anchor::{HPos, Pos, VPos}, Color, FontStyle, IntoFont, RGBColor, ShapeStyle, BLACK, RED, WHITE},
+    style::{
+        self, register_font,
+        text_anchor::{HPos, Pos, VPos},
+        Color, FontStyle, IntoFont, RGBColor, ShapeStyle, BLACK, RED, WHITE,
+    },
 };
 use serde::Deserialize;
 
@@ -30,10 +34,9 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
     let max_price = prices
         .iter()
         .fold(f32::NEG_INFINITY, |a, &b| a.max(b.price))
-        .max(15.) + 5.0;
-    let mut min_price = prices
-        .iter()
-        .fold(0.0f32, |a, &b| a.min(b.price));
+        .max(15.)
+        + 5.0;
+    let mut min_price = prices.iter().fold(0.0f32, |a, &b| a.min(b.price));
 
     // Move the min price a bit lower for better visual spacing
     // in case we have negative prices
@@ -92,9 +95,11 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .margin(20)
             .build_cartesian_2d(start_date..end_date, min_price..max_price)?;
 
-        let y_label_style = style::TextStyle::from(("sans-serif", 28).into_font()).pos(Pos::new(HPos::Right, VPos::Bottom));
+        let y_label_style = style::TextStyle::from(("sans-serif", 28).into_font())
+            .pos(Pos::new(HPos::Right, VPos::Bottom));
         let x_label_style = style::TextStyle::from(("sans-serif", 26).into_font());
-        let x_label_style_date = style::TextStyle::from(("sans-serif", 26).into_font()).pos(Pos::new(HPos::Center, VPos::Top));
+        let x_label_style_date = style::TextStyle::from(("sans-serif", 26).into_font())
+            .pos(Pos::new(HPos::Center, VPos::Top));
 
         // make a single ShapeStyle representing the gray mesh style (use same stroke width)
         let axis_mesh_style = ShapeStyle::from(&RGBColor(150, 150, 150)).stroke_width(1);
@@ -164,7 +169,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                     (current_date, f32::INFINITY),
                 ],
                 BLACK.mix(0.08).filled(),
-            )
+            ),
         ))?;
 
         // Highlight the step segment that corresponds to the current time in red,
@@ -188,7 +193,11 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             // Draw a thin gray connector from the step (midpoint) up to the annotation
             let seg_mid = seg_start + Duration::seconds((seg_end - seg_start).num_seconds() / 2);
             ctx.draw_series(LineSeries::new(
-                vec![(seg_mid, seg_price + y_offset_val / 10.0), (seg_mid, seg_price + y_offset_val)].into_iter(),
+                vec![
+                    (seg_mid, seg_price + y_offset_val / 10.0),
+                    (seg_mid, seg_price + y_offset_val),
+                ]
+                .into_iter(),
                 ShapeStyle::from(BLACK.mix(0.3).filled()).stroke_width(1),
             ))?;
 
@@ -196,11 +205,13 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             let cur_label = format!("{seg_price:.2}");
             let cur_label_style = style::TextStyle::from(("sans-serif", 26).into_font())
                 .pos(Pos::new(HPos::Center, VPos::Bottom)); // bottom anchor -> text sits above the coord
-            ctx.draw_series(std::iter::once(
-                Text::new(cur_label, label_pos, cur_label_style),
-            ))?;
+            ctx.draw_series(std::iter::once(Text::new(
+                cur_label,
+                label_pos,
+                cur_label_style,
+            )))?;
         }
-        
+
         // Draw date labels under the x-axis
 
         let mut first = true;
@@ -237,7 +248,11 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                 let date_label = tick_dt.format("%d.%m").to_string();
 
                 // draw directly on the root drawing area using pixel coords so the text appears under the axis
-                root.draw(&Text::new(date_label, (x_px, y_px), x_label_style_date.clone()))?;
+                root.draw(&Text::new(
+                    date_label,
+                    (x_px, y_px),
+                    x_label_style_date.clone(),
+                ))?;
             }
         }
 
