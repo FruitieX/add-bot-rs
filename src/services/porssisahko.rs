@@ -1,5 +1,4 @@
 use cached::proc_macro::cached;
-use std::cmp::{max, min};
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
 use color_eyre::{eyre::eyre, Result};
@@ -13,6 +12,7 @@ use plotters::{
     },
 };
 use serde::Deserialize;
+use std::cmp::{max, min};
 
 const TZ: Tz = chrono_tz::Europe::Helsinki;
 
@@ -128,7 +128,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .axis_style(axis_mesh_style.clone()) // make axis lines match mesh style
             .draw()?;
 
-       ctx.draw_series(prices.iter().map(|hp| {
+        ctx.draw_series(prices.iter().map(|hp| {
             Rectangle::new(
                 [
                     (
@@ -212,7 +212,6 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                 cur_label_style,
             )))?;
         }
-
 
         ctx.draw_series(std::iter::once(
             // Grey out past price
