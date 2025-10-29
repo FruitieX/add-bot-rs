@@ -241,21 +241,25 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
         let duration_secs = (end_date - start_date).num_seconds() as f64;
 
         // draw date labels under the x-axis in the bottom label area using pixel coordinates on `root`
+        // at the same time, draw minor tick marks for each hour (except when hour % 4 == 0)
         for hp in &prices {
             let tick_dt = hp.start_date.with_timezone(&TZ);
+            if tick_dt.minute() != 0 {
+                continue;
+            }
 
-            if first || (tick_dt.hour() == 0 && tick_dt.minute() == 0) {
+            // fraction across the x-range for this timestamp
+            let offset_secs = (tick_dt - start_date).num_seconds() as f64;
+            let frac = (offset_secs / duration_secs).clamp(0.0, 1.0);
+
+            // convert fraction to pixel X in root coordinates
+            let x_px = (plot_left_px + frac * plot_width_px).round() as i32;
+
+            // place the date label vertically inside the bottom label area (tweak as needed)
+            let y_px = (height as i32) - (margin_px as i32) - (bottom_label_px as i32 / 2);
+
+            if first || (tick_dt.hour() == 0) {
                 first = false;
-
-                // fraction across the x-range for this timestamp
-                let offset_secs = (tick_dt - start_date).num_seconds() as f64;
-                let frac = (offset_secs / duration_secs).clamp(0.0, 1.0);
-
-                // convert fraction to pixel X in root coordinates
-                let x_px = (plot_left_px + frac * plot_width_px).round() as i32;
-
-                // place the date label vertically inside the bottom label area (tweak as needed)
-                let y_px = (height as i32) - (margin_px as i32) - (bottom_label_px as i32 / 2);
 
                 let date_label = tick_dt.format("%d.%m").to_string();
 
@@ -264,6 +268,17 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                     date_label,
                     (x_px, y_px),
                     x_label_style_date.clone(),
+                ))?;
+            }
+
+            let x_axis_location = height as i32 - margin_px as i32 - 75;
+
+            // don't draw the minor tick mark if hour module 4 is zero
+            if tick_dt.hour() % 4 != 0 {
+                // draw a minor tick mark
+                root.draw(&Rectangle::new(
+                    [(x_px - 1, x_axis_location), (x_px, x_axis_location - 5)],
+                    RGBColor(150, 150, 150).filled(),
                 ))?;
             }
         }
