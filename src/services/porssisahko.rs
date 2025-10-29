@@ -1,4 +1,5 @@
 use cached::proc_macro::cached;
+use std::cmp::{max, min};
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
 use color_eyre::{eyre::eyre, Result};
@@ -122,55 +123,55 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .x_label_formatter(&fmt_x_axis)
             .y_label_formatter(&fmt_y_axis)
             .y_desc("Price (c/kWh)")
-            .x_max_light_lines(1)
+            .x_max_light_lines(4)
             .y_max_light_lines(1)
             .axis_style(axis_mesh_style.clone()) // make axis lines match mesh style
             .draw()?;
 
-        // Build step-line points: duplicate each interval so line is a step function
-        let mut step_points: Vec<(DateTime<Tz>, f32)> = Vec::with_capacity(prices.len() * 2 + 1);
-        for hp in &prices {
-            let s = hp.start_date.with_timezone(&TZ);
-            let e = (hp.start_date + Duration::minutes(15)).with_timezone(&TZ);
-            step_points.push((s, hp.price));
-            step_points.push((e, hp.price));
-        }
-
-        // Draw the step line (single color; adjust thickness if desired)
-        ctx.draw_series(LineSeries::new(
-            step_points.into_iter(),
-            ShapeStyle::from(&RGBColor(91, 160, 240)).stroke_width(1),
-            // ShapeStyle::from(&RGBColor(50, 120, 200)).stroke_width(2),
-        ))?;
-
-        // Draw each step segment that start on the hour (minute == 0) in darker blue
-        for hp in &prices {
-            let s = hp.start_date.with_timezone(&TZ);
-            let e = (hp.start_date + Duration::minutes(18)).with_timezone(&TZ);
-
-            let seg_color = if s.minute() == 0 {
-                // darker blue for hour-aligned segments
-                RGBColor(20, 80, 160)
-            } else {
-                RGBColor(91, 160, 240)
-            };
-
-            ctx.draw_series(LineSeries::new(
-                vec![(s, hp.price), (e, hp.price)].into_iter(),
-                ShapeStyle::from(&seg_color).stroke_width(2),
-            ))?;
-        }
-
-        ctx.draw_series(std::iter::once(
-            // Grey out past price
+       ctx.draw_series(prices.iter().map(|hp| {
             Rectangle::new(
                 [
-                    (start_date, f32::NEG_INFINITY),
-                    (current_date, f32::INFINITY),
+                    (
+                        hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
+                        0.0,
+                    ),
+                    (
+                        (hp.start_date + Duration::minutes(15))
+                            .with_timezone(&chrono_tz::Europe::Helsinki),
+                        hp.price,
+                    ),
                 ],
-                BLACK.mix(0.08).filled(),
-            ),
-        ))?;
+                {
+                    let gradient = colorous::VIRIDIS;
+
+                    // We scale up the prices from 0.xx cents to something more usize friendly, as we need
+                    // that later to get the color gradient.
+                    let scale_up = 100;
+                    let current_price = (hp.price * scale_up as f32) as usize;
+
+                    // We "push" values up a bit artificially, so that we can avoid the first part of the color gradient.
+                    let tulttans_constant = 0.2;
+
+                    // This determins how dark the darkest price is. In the future, it could maybe be based on the
+                    // highest price of the day?
+                    let max_price: f32 = (30 * scale_up) as f32;
+                    let tulttans_max_price = (max_price * (1.0 + tulttans_constant)) as usize;
+
+                    // We "push" values up a bit artificially, so that we can avoid the first part of the color gradient.
+                    let tulttans_fix_to_avoid_spy_color = (tulttans_constant * max_price) as usize;
+
+                    let cor = gradient.eval_rational(
+                        tulttans_max_price
+                            - min(
+                                max(current_price, 0) + tulttans_fix_to_avoid_spy_color,
+                                tulttans_max_price,
+                            ),
+                        tulttans_max_price,
+                    );
+                    RGBColor(cor.r, cor.g, cor.b).filled()
+                },
+            )
+        }))?;
 
         // Highlight the step segment that corresponds to the current time in red,
         // and annotate it above the line with a small gray connector.
@@ -211,6 +212,18 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                 cur_label_style,
             )))?;
         }
+
+
+        ctx.draw_series(std::iter::once(
+            // Grey out past price
+            Rectangle::new(
+                [
+                    (start_date, f32::NEG_INFINITY),
+                    (current_date, f32::INFINITY),
+                ],
+                BLACK.mix(0.08).filled(),
+            ),
+        ))?;
 
         // Draw date labels under the x-axis
 
