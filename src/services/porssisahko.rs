@@ -88,8 +88,8 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .caption(
                 format!(
                     "Elpris {from}—{to}",
-                    from = start_date.format("%d.%m.%Y").to_string(),
-                    to = end_date.format("%d.%m.%Y").to_string(),
+                    from = start_date.format("%d.%m.%Y"),
+                    to = end_date.format("%d.%m.%Y"),
                 ),
                 ("sans-serif", 35),
             )
@@ -106,7 +106,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
         let axis_mesh_style = ShapeStyle::from(&RGBColor(150, 150, 150)).stroke_width(1);
 
         // determine an x-label count so labels are at most every 4 hours
-        let total_hours = ((end_date - start_date).num_seconds() / 3600) as i64;
+        let total_hours = (end_date - start_date).num_seconds() / 3600;
         let mut x_label_count = (total_hours / 4) as usize + 1; // floor(total_hours/4) + 1
         if x_label_count == 0 {
             x_label_count = 1;
@@ -125,7 +125,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
             .y_desc("Price (c/kWh)")
             .x_max_light_lines(4)
             .y_max_light_lines(1)
-            .axis_style(axis_mesh_style.clone()) // make axis lines match mesh style
+            .axis_style(axis_mesh_style) // make axis lines match mesh style
             .draw()?;
 
         ctx.draw_series(prices.iter().map(|hp| {
@@ -199,7 +199,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                     (seg_mid, seg_price + y_offset_val),
                 ]
                 .into_iter(),
-                ShapeStyle::from(BLACK.mix(0.3).filled()).stroke_width(1),
+                BLACK.mix(0.3).filled().stroke_width(1),
             ))?;
 
             // Draw the annotation text above the connector
