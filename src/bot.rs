@@ -4,7 +4,7 @@ use crate::{
         activity::get_activity_inputfile,
         queue::{add_remove, list, remove_all},
         sahko::get_sahko_inputfile,
-        stats::{hall_of_fame, hall_of_shame, last_played, stats},
+        stats::{hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats},
         weather::{temperature, weather as weather_report},
     },
     settings::Settings,
@@ -77,6 +77,7 @@ pub async fn handle_cmd(
             send_photo(&bot, &chat_id, photo).await;
             return Some(());
         }
+        Command::StatLeaderboard { stat_type } => stat_leaderboard(&settings, stat_type).await,
     };
 
     send_msg(&bot, &chat_id, &text, markdown).await;

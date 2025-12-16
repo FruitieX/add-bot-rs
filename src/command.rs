@@ -19,6 +19,12 @@ The following commands are supported:
 - /stats        Leetify stats for player.
 - /halloffame   Top 10 players by skill level.
 - /hallofshame  Top 10 players by last played date.
+- /aim          Leaderboard by aim rating.
+- /positioning  Leaderboard by positioning.
+- /utility      Leaderboard by utility usage.
+- /opening      Leaderboard by opening duels.
+- /clutch       Leaderboard by clutch rating.
+- /leetify      Leaderboard by Leetify rating.
 - /activity     Daily games played by all players (last 365 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
@@ -73,6 +79,11 @@ pub enum Command {
 
     // Get the latest electricity prices as a chart
     Sahko,
+
+    /// Leaderboard for a specific stat (aim, positioning, utility, opening, clutch, leetify)
+    StatLeaderboard {
+        stat_type: String,
+    },
 }
 
 impl Command {
@@ -169,11 +180,29 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" | "version" | "v" | "start" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "statistics" | "stats" | "leetify" => {
+            "statistics" | "stats" => {
                 let for_user = args.and_then(parse_username_arg);
 
                 Some(Command::Stats { for_user })
             }
+            "aim" => Some(Command::StatLeaderboard {
+                stat_type: "aim".to_string(),
+            }),
+            "positioning" | "pos" => Some(Command::StatLeaderboard {
+                stat_type: "positioning".to_string(),
+            }),
+            "utility" | "util" | "nades" => Some(Command::StatLeaderboard {
+                stat_type: "utility".to_string(),
+            }),
+            "opening" | "openingduels" | "duels" => Some(Command::StatLeaderboard {
+                stat_type: "opening".to_string(),
+            }),
+            "clutch" | "clutches" => Some(Command::StatLeaderboard {
+                stat_type: "clutch".to_string(),
+            }),
+            "leetify" | "rating" | "lr" => Some(Command::StatLeaderboard {
+                stat_type: "leetify".to_string(),
+            }),
             "hallofshame" | "wallofshame" | "shame" => Some(Command::HallOfShame),
             "halloffame" | "walloffame" | "fame" | "top" | "top10" | "ranks" | "premier" => {
                 Some(Command::HallOfFame {
