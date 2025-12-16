@@ -204,3 +204,67 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
         }
     }
 }
+
+fn stat_type_display_name(stat_type: &str) -> String {
+    match stat_type {
+        "aim" => "Aim".to_string(),
+        "positioning" => "Positioning".to_string(),
+        "utility" => "Utility".to_string(),
+        "opening" => "Opening Duels".to_string(),
+        "clutch" => "Clutch".to_string(),
+        "leetify" => "Leetify Rating".to_string(),
+        _ => stat_type.to_string(),
+    }
+}
+
+fn format_stat_value(stat_type: &str, value: f32) -> String {
+    match stat_type {
+        // Opening and clutch are stored as decimals (0.xx), display as percentages
+        "opening" | "clutch" => format!("{:.1}%", value * 100.0),
+        // Leetify rating is stored as a small number (e.g. 0.05), display as +/- percentage
+        "leetify" => {
+            let pct = value * 100.0;
+            let sign = if pct >= 0.0 { "+" } else { "" };
+            format!("{sign}{pct:.2}")
+        }
+        // Aim, positioning, utility are direct ratings (e.g. 0.85)
+        _ => format!("{:.2}", value),
+    }
+}
+
+pub async fn stat_leaderboard(settings: &Settings, stat_type: String) -> String {
+    let res = services::leetify::stat_leaderboard(settings, &stat_type).await;
+
+    match res {
+        Ok(leaderboard) => {
+            let stat_name = stat_type_display_name(&stat_type);
+            let list = leaderboard
+                .entries
+                .iter()
+                .take(10)
+                .enumerate()
+                .map(|(index, entry)| {
+                    let username = &entry.username;
+                    let pos = index_to_pos(index);
+                    let stat_value = format_stat_value(&stat_type, entry.stat_value);
+
+                    format!("{pos}: {username} ({stat_value})")
+                })
+                .collect::<Vec<String>>()
+                .join("\n");
+
+            if leaderboard.entries.is_empty() {
+                return format!("No entries found for {stat_name}. ☹️");
+            }
+
+            let avg = format_stat_value(&stat_type, leaderboard.avg);
+            let median = format_stat_value(&stat_type, leaderboard.median);
+
+            format!("{stat_name} Leaderboard (top 10):\n\n{list}\n\nAvg: {avg}, Median: {median}")
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch stat leaderboard from Leetify: {}", e);
+            "Failed to fetch stat leaderboard from Leetify".to_string()
+        }
+    }
+}

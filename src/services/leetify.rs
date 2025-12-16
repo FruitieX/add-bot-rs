@@ -358,3 +358,90 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
         entries,
     })
 }
+
+#[derive(Debug)]
+pub struct StatLeaderboardEntry {
+    pub username: Username,
+    pub stat_value: f32,
+}
+
+#[allow(dead_code)]
+pub struct StatLeaderboard {
+    pub stat_type: String,
+    pub entries: Vec<StatLeaderboardEntry>,
+    pub avg: f32,
+    pub median: f32,
+}
+
+/// List top 10 players based on a specific stat (aim, positioning, utility, opening, clutch, leetify)
+pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<StatLeaderboard> {
+    let steamid_mappings = settings.players.steamid_mappings.clone();
+
+    let futures: Vec<_> = steamid_mappings
+        .into_iter()
+        .map(|(username, steamid)| {
+            let stat_type = stat_type.to_string();
+
+            async move {
+                let resp = get_leetify_mini_profile(steamid.clone()).await;
+
+                let Some(resp) = resp else {
+                    eprintln!("Failed to fetch Leetify mini profile for player {username}");
+
+                    return None;
+                };
+
+                let stat_value = match stat_type.as_str() {
+                    "aim" => resp.ratings.aim,
+                    "positioning" => resp.ratings.positioning,
+                    "utility" => resp.ratings.utility,
+                    "opening" => resp.ratings.opening,
+                    "clutch" => resp.ratings.clutch,
+                    "leetify" => resp.ratings.leetify,
+                    _ => return None,
+                };
+
+                Some(StatLeaderboardEntry {
+                    username: username.clone(),
+                    stat_value,
+                })
+            }
+        })
+        .collect();
+
+    // create a buffered stream that will execute up to 3 futures in parallel
+    // (without preserving the order of the results)
+    let stream = futures::stream::iter(futures).buffer_unordered(3);
+
+    // wait for all futures to complete
+    let tasks_results = stream.collect::<Vec<_>>().await;
+
+    let mut entries: Vec<StatLeaderboardEntry> = tasks_results.into_iter().flatten().collect();
+
+    // Sort by stat value, highest first
+    entries.sort_by(|a, b| {
+        b.stat_value
+            .partial_cmp(&a.stat_value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let stat_values: Vec<f32> = entries.iter().map(|e| e.stat_value).collect();
+    let avg = if stat_values.is_empty() {
+        0.0
+    } else {
+        stat_values.iter().sum::<f32>() / stat_values.len() as f32
+    };
+
+    let median = if stat_values.is_empty() {
+        0.0
+    } else {
+        stat_values[stat_values.len() / 2]
+    };
+
+    Ok(StatLeaderboard {
+        stat_type: stat_type.to_string(),
+        entries,
+        avg,
+        median,
+    })
+}
