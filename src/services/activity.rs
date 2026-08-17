@@ -13,14 +13,26 @@ use plotters::{
 };
 
 use crate::{
-    services::leetify::{get_leetify_stats, LeetifyGame},
+    services::leetify::{get_leetify_games, LeetifyGame},
     settings::Settings,
 };
 
-/// Generate a bar chart over the last year of how many unique games the configured
-/// players have played (team games counted only once even if multiple configured players
-/// participated).
+/// Generate a bar chart over the last 90 days of how many unique games the configured
+/// players have played. The public Leetify API no longer exposes teammate rosters,
+/// so games are deduplicated by match ID instead of being restricted to configured teams.
 use crate::types::Username;
+
+fn game_key(game: &LeetifyGame) -> String {
+    game.id.clone().unwrap_or_else(|| {
+        format!(
+            "{}:{}:{}-{}",
+            game.game_finished_at.timestamp(),
+            game.map_name,
+            game.scores.0,
+            game.scores.1
+        )
+    })
+}
 
 pub async fn get_activity_chart(
     settings: &Settings,
@@ -31,55 +43,27 @@ pub async fn get_activity_chart(
     let mappings = settings.players.steamid_mappings.clone();
     let futures: Vec<_> = mappings
         .into_iter()
-        .map(|(username, steamid)| async move { (username, get_leetify_stats(steamid).await) })
+        .map(|(username, steamid)| {
+            let settings = settings.clone();
+            async move { (username, get_leetify_games(&settings, &steamid).await) }
+        })
         .collect();
-    let player_results = futures::future::join_all(futures).await; // Vec<(Username, Option<Value>)>
-
-    // Get all configured SteamIDs for team game filtering
-    let all_configured_steamids: Vec<String> = settings
-        .players
-        .steamid_mappings
-        .values()
-        .map(|s| s.to_string())
-        .collect();
+    let player_results = futures::future::join_all(futures).await;
 
     // Keep per-player games (raw) and master list for total aggregation
     let mut per_player_games: Vec<(String, Vec<LeetifyGame>)> = Vec::new();
     let mut all_games: Vec<LeetifyGame> = Vec::new();
     for (username, maybe_stats) in player_results.into_iter() {
-        if let Some(stats) = maybe_stats {
-            if let Some(games_field) = stats.get("games") {
-                if let Ok(games) = serde_json::from_value::<Vec<LeetifyGame>>(games_field.clone()) {
-                    // Filter games to only include those with 2+ configured players
-                    let filtered_games: Vec<LeetifyGame> = games
-                        .into_iter()
-                        .filter(|game| {
-                            // Count how many configured players were in this game
-                            let configured_players_in_game = all_configured_steamids
-                                .iter()
-                                .filter(|steam_id| {
-                                    game.own_team_steam64_ids
-                                        .iter()
-                                        .any(|id| id.to_string() == **steam_id)
-                                })
-                                .count();
-
-                            // Only include games where 2+ configured players participated
-                            configured_players_in_game >= 2
-                        })
-                        .collect();
-
-                    let un = username.to_string();
-                    let include = match filter_user {
-                        Some(fu) => *fu == username,
-                        None => true,
-                    };
-                    if include {
-                        all_games.extend(filtered_games.clone());
-                    }
-                    per_player_games.push((un, filtered_games));
-                }
+        if let Some(games) = maybe_stats {
+            let un = username.to_string();
+            let include = match filter_user {
+                Some(fu) => *fu == username,
+                None => true,
+            };
+            if include {
+                all_games.extend(games.clone());
             }
+            per_player_games.push((un, games));
         }
     }
 
@@ -92,18 +76,11 @@ pub async fn get_activity_chart(
     let span_days = 90;
     let start = today - Duration::days(span_days);
 
-    // Deduplicate games across players (or within single player if filtered). Since API doesn't expose an explicit match id in
-    // LeetifyGame, construct a synthetic key from (finish timestamp + map + score).
+    // Deduplicate games across players using the public API's match ID.
     let mut seen: HashSet<String> = HashSet::new();
     let mut counts: HashMap<NaiveDate, u32> = HashMap::new();
     for g in all_games.into_iter() {
-        let key = format!(
-            "{}:{}:{}-{}",
-            g.game_finished_at.timestamp(),
-            g.map_name,
-            g.scores.0,
-            g.scores.1
-        );
+        let key = game_key(&g);
         if !seen.insert(key.clone()) {
             continue;
         }
@@ -139,13 +116,7 @@ pub async fn get_activity_chart(
             let mut filtered_seen: HashSet<String> = HashSet::new();
 
             for g in filtered_games.iter() {
-                let key = format!(
-                    "{}:{}:{}-{}",
-                    g.game_finished_at.timestamp(),
-                    g.map_name,
-                    g.scores.0,
-                    g.scores.1
-                );
+                let key = game_key(g);
                 let d = g.game_finished_at.date_naive();
 
                 if d >= start && d <= today && seen_global_games.insert(key.clone()) {
@@ -161,13 +132,7 @@ pub async fn get_activity_chart(
                     // Find ALL configured players who participated in this game with the filtered user
                     for (other_username, other_games) in per_player_games.iter() {
                         for other_game in other_games.iter() {
-                            let other_key = format!(
-                                "{}:{}:{}-{}",
-                                other_game.game_finished_at.timestamp(),
-                                other_game.map_name,
-                                other_game.scores.0,
-                                other_game.scores.1
-                            );
+                            let other_key = game_key(other_game);
 
                             // Same game - this player was a teammate
                             if key == other_key && *other_username != filtered_username {
@@ -185,26 +150,14 @@ pub async fn get_activity_chart(
         // Original logic for global view
         for (_username, games) in per_player_games.iter() {
             for g in games.iter() {
-                let key = format!(
-                    "{}:{}:{}-{}",
-                    g.game_finished_at.timestamp(),
-                    g.map_name,
-                    g.scores.0,
-                    g.scores.1
-                );
+                let key = game_key(g);
                 let d = g.game_finished_at.date_naive();
 
                 if d >= start && d <= today && seen_global_games.insert(key.clone()) {
                     // For each unique game, find ALL configured players who participated
                     for (other_username, other_games) in per_player_games.iter() {
                         for other_game in other_games.iter() {
-                            let other_key = format!(
-                                "{}:{}:{}-{}",
-                                other_game.game_finished_at.timestamp(),
-                                other_game.map_name,
-                                other_game.scores.0,
-                                other_game.scores.1
-                            );
+                            let other_key = game_key(other_game);
 
                             // Same game - this player participated
                             if key == other_key {
@@ -226,13 +179,7 @@ pub async fn get_activity_chart(
         let mut map: HashMap<NaiveDate, u32> = HashMap::new();
         let mut seen_player: HashSet<String> = HashSet::new();
         for g in games.iter() {
-            let key = format!(
-                "{}:{}:{}-{}",
-                g.game_finished_at.timestamp(),
-                g.map_name,
-                g.scores.0,
-                g.scores.1
-            );
+            let key = game_key(g);
             if !seen_player.insert(key.clone()) {
                 continue;
             }
@@ -366,13 +313,7 @@ pub async fn get_activity_chart(
                 if d < start || d > today {
                     continue;
                 }
-                let key = format!(
-                    "{}:{}:{}-{}",
-                    g.game_finished_at.timestamp(),
-                    g.map_name,
-                    g.scores.0,
-                    g.scores.1
-                );
+                let key = game_key(g);
                 keys.insert(key);
             }
             player_keys_map.insert(username.clone(), keys);

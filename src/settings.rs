@@ -25,6 +25,13 @@ pub struct WeatherSettings {
     pub display_name: String,
 }
 
+#[derive(Clone, Deserialize, Debug, Default)]
+#[serde(default)]
+pub struct LeetifySettings {
+    /// Optional API key from https://leetify.com/app/developer
+    pub api_key: Option<String>,
+}
+
 #[derive(Clone, Deserialize, Debug)]
 
 pub struct Settings {
@@ -33,6 +40,8 @@ pub struct Settings {
     pub players: PlayersSettings,
 
     pub weather: Option<WeatherSettings>,
+    #[serde(default)]
+    pub leetify: Option<LeetifySettings>,
 }
 
 pub fn read_settings() -> Result<Settings, config::ConfigError> {

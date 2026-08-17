@@ -24,7 +24,7 @@ The following commands are supported:
 - /utility      Leaderboard by utility usage.
 - /opening      Leaderboard by opening duels.
 - /clutch       Leaderboard by clutch rating.
-- /leetify      Leaderboard by Leetify rating.
+- /teamflash    Team flash hall of shame.
 - /activity     Daily games played by all players (last 365 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
@@ -80,10 +80,14 @@ pub enum Command {
     // Get the latest electricity prices as a chart
     Sahko,
 
-    /// Leaderboard for a specific stat (aim, positioning, utility, opening, clutch, leetify)
+    /// Leaderboard for a specific stat (aim, positioning, utility, opening, clutch)
     StatLeaderboard {
         stat_type: String,
     },
+
+    /// Team flash hall of shame
+    TeamFlash,
+
 }
 
 impl Command {
@@ -200,9 +204,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "clutch" | "clutches" => Some(Command::StatLeaderboard {
                 stat_type: "clutch".to_string(),
             }),
-            "leetify" | "rating" | "lr" => Some(Command::StatLeaderboard {
-                stat_type: "leetify".to_string(),
-            }),
+            "teamflash" | "tf" | "flash" | "blind" => Some(Command::TeamFlash),
             "hallofshame" | "wallofshame" | "shame" => Some(Command::HallOfShame),
             "halloffame" | "walloffame" | "fame" | "top" | "top10" | "ranks" | "premier" => {
                 Some(Command::HallOfFame {

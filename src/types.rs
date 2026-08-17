@@ -43,6 +43,12 @@ impl std::fmt::Display for Username {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct SteamID(String);
 
+impl SteamID {
+    pub fn new(id: String) -> SteamID {
+        SteamID(id)
+    }
+}
+
 impl std::fmt::Display for SteamID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

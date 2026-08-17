@@ -13,3 +13,7 @@ bot_api_token = "<telegram bot API token here>"
 latitude = 60.1719
 longitude = 24.9414
 display_name = "Helsinki, FI"
+# Optional Leetify Public CS API key.
+# Obtain one at https://leetify.com/app/developer
+#[leetify]
+#api_key = "<Leetify API key>"
