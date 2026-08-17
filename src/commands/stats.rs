@@ -165,6 +165,30 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
     }
 }
 
+fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> String {
+    let wins = recent_matches
+        .iter()
+        .filter(|m| matches!(&m.result, services::leetify::MatchResult::Win))
+        .count();
+    let losses = recent_matches
+        .iter()
+        .filter(|m| matches!(&m.result, services::leetify::MatchResult::Loss))
+        .count();
+    let decisive_matches = wins + losses;
+    let win_percentage = if decisive_matches == 0 {
+        0.0
+    } else {
+        wins as f32 / decisive_matches as f32 * 100.0
+    };
+    let results = recent_matches
+        .iter()
+        .map(|m| m.result.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!("{results} ({wins}W/{losses}L, {win_percentage:.0}% win rate)")
+}
+
 pub async fn stats(settings: &Settings, username: &Username) -> String {
     let res = services::leetify::player_stats(settings, username).await;
 
@@ -192,12 +216,7 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
                 .and_then(|r| r.skill_level)
                 .map(|r| r.to_string())
                 .unwrap_or("N/A".to_string());
-            let recent_results = stats
-                .recent_matches
-                .iter()
-                .map(|m| m.result.to_string())
-                .collect::<Vec<_>>()
-                .join(" ");
+            let recent_results = format_recent_results(&stats.recent_matches);
 
             let text = format!("Stats for {username} from last 30 matches:\n- CT Leetify rating: {ct_leetify}\n- T Leetify rating: {t_leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}\n- Recent results: {recent_results}");
             text
@@ -206,6 +225,38 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
             eprintln!("Failed to fetch player stats from Leetify: {}", e);
             "Failed to fetch player stats from Leetify".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::leetify::{MatchResult, RecentMatch};
+
+    fn result(result: MatchResult) -> RecentMatch {
+        RecentMatch { result }
+    }
+
+    #[test]
+    fn recent_results_include_win_loss_counts_and_percentage() {
+        let results = vec![
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+            result(MatchResult::Tie),
+        ];
+
+        assert_eq!(
+            format_recent_results(&results),
+            "W L W T (2W/1L, 67% win rate)"
+        );
+    }
+
+    #[test]
+    fn ties_do_not_make_an_all_tie_result_a_win() {
+        let results = vec![result(MatchResult::Tie)];
+
+        assert_eq!(format_recent_results(&results), "T (0W/0L, 0% win rate)");
     }
 }
 
