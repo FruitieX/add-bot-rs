@@ -166,6 +166,8 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
 }
 
 fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> String {
+    const DISPLAYED_RESULTS: usize = 10;
+
     let wins = recent_matches
         .iter()
         .filter(|m| matches!(&m.result, services::leetify::MatchResult::Win))
@@ -173,6 +175,10 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     let losses = recent_matches
         .iter()
         .filter(|m| matches!(&m.result, services::leetify::MatchResult::Loss))
+        .count();
+    let ties = recent_matches
+        .iter()
+        .filter(|m| matches!(&m.result, services::leetify::MatchResult::Tie))
         .count();
     let decisive_matches = wins + losses;
     let win_percentage = if decisive_matches == 0 {
@@ -182,11 +188,12 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     };
     let results = recent_matches
         .iter()
+        .take(DISPLAYED_RESULTS)
         .map(|m| m.result.to_string())
         .collect::<Vec<_>>()
         .join(" ");
 
-    format!("{results} ({wins}W/{losses}L, {win_percentage:.0}% win rate)")
+    format!("{results} ({wins}W/{losses}L/{ties}T, {win_percentage:.0}% win rate)")
 }
 
 pub async fn stats(settings: &Settings, username: &Username) -> String {
@@ -248,7 +255,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "W L W T (2W/1L, 67% win rate)"
+            "W L W T (2W/1L/1T, 67% win rate)"
         );
     }
 
@@ -256,7 +263,31 @@ mod tests {
     fn ties_do_not_make_an_all_tie_result_a_win() {
         let results = vec![result(MatchResult::Tie)];
 
-        assert_eq!(format_recent_results(&results), "T (0W/0L, 0% win rate)");
+        assert_eq!(format_recent_results(&results), "T (0W/0L/1T, 0% win rate)");
+    }
+
+    #[test]
+    fn only_ten_results_are_rendered_but_all_100_results_are_counted() {
+        let mut results = vec![
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Tie),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+        ];
+        results.extend((0..35).map(|_| result(MatchResult::Win)));
+        results.extend((0..51).map(|_| result(MatchResult::Loss)));
+        results.extend((0..4).map(|_| result(MatchResult::Tie)));
+
+        assert_eq!(
+            format_recent_results(&results),
+            "W L T W L W L W L W (40W/55L/5T, 42% win rate)"
+        );
     }
 }
 
