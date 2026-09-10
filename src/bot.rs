@@ -4,7 +4,10 @@ use crate::{
         activity::get_activity_inputfile,
         queue::{add_remove, list, remove_all},
         sahko::get_sahko_inputfile,
-        stats::{hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats, team_flash_leaderboard},
+        stats::{
+            hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats,
+            team_flash_leaderboard,
+        },
         weather::{temperature, weather as weather_report},
     },
     settings::Settings,

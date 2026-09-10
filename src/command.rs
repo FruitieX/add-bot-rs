@@ -87,7 +87,6 @@ pub enum Command {
 
     /// Team flash hall of shame
     TeamFlash,
-
 }
 
 impl Command {
