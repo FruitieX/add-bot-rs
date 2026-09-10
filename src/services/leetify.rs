@@ -546,8 +546,9 @@ fn best_teammate(mut entries: Vec<TeammateStatsEntry>, wins: bool) -> Option<Tea
     })
 }
 
-fn teammate_stats_from_games(
+fn teammate_stats_from_configured_games(
     games: &[LeetifyGame],
+    configured_games: &HashMap<SteamID, Vec<LeetifyGame>>,
     steamid_mappings: &HashMap<Username, SteamID>,
     own_steamid: &SteamID,
 ) -> TeammateStats {
@@ -555,13 +556,31 @@ fn teammate_stats_from_games(
     recent_games.sort_by_key(|game| std::cmp::Reverse(game.game_finished_at));
     recent_games.truncate(RECENT_MATCHES_LIMIT);
 
+    let teammate_match_ids: HashMap<&SteamID, HashSet<&str>> = steamid_mappings
+        .values()
+        .filter(|teammate_steamid| *teammate_steamid != own_steamid)
+        .filter_map(|teammate_steamid| {
+            configured_games.get(teammate_steamid).map(|games| {
+                (
+                    teammate_steamid,
+                    games.iter().filter_map(|game| game.id.as_deref()).collect(),
+                )
+            })
+        })
+        .collect();
+
     let mut entries = HashMap::<SteamID, TeammateStatsEntry>::new();
 
     for game in recent_games {
+        let Some(match_id) = game.id.as_deref() else {
+            continue;
+        };
+
         for (username, teammate_steamid) in steamid_mappings {
-            if teammate_steamid == own_steamid
-                || !game.own_team_steam64_ids.contains(teammate_steamid)
-            {
+            let Some(match_ids) = teammate_match_ids.get(teammate_steamid) else {
+                continue;
+            };
+            if !match_ids.contains(match_id) {
                 continue;
             }
 
@@ -593,12 +612,14 @@ fn teammate_stats_from_games(
 pub async fn teammate_stats(settings: &Settings, username: &Username) -> Result<TeammateStats> {
     let own_steamid = steamid_for_username(settings.clone(), username)
         .ok_or_else(|| eyre!(format!("No SteamID configured for user {username}")))?;
-    let games = get_leetify_games(settings, &own_steamid)
-        .await
+    let configured_games = get_configured_player_games(settings).await;
+    let games = configured_games
+        .get(&own_steamid)
         .ok_or_else(|| eyre!("Failed to fetch match stats from Leetify"))?;
 
-    Ok(teammate_stats_from_games(
-        &games,
+    Ok(teammate_stats_from_configured_games(
+        games,
+        &configured_games,
         &settings.players.steamid_mappings,
         &own_steamid,
     ))
@@ -1095,44 +1116,67 @@ mod tests {
         let own_steamid = SteamID::new("own".to_string());
         let alice_steamid = SteamID::new("alice".to_string());
         let bob_steamid = SteamID::new("bob".to_string());
-        let outsider_steamid = SteamID::new("outsider".to_string());
 
         let mut steamid_mappings = HashMap::new();
         steamid_mappings.insert(Username::new("player".to_string()), own_steamid.clone());
         steamid_mappings.insert(Username::new("alice".to_string()), alice_steamid.clone());
         steamid_mappings.insert(Username::new("bob".to_string()), bob_steamid.clone());
 
-        let make_game =
-            |days_ago: i64, teammates: Vec<SteamID>, match_result: &str| -> LeetifyGame {
-                let mut own_team_steam64_ids = vec![own_steamid.clone()];
-                own_team_steam64_ids.extend(teammates);
+        let make_game = |id: &str, days_ago: i64, match_result: &str| -> LeetifyGame {
+            LeetifyGame {
+                id: Some(id.to_string()),
+                own_team_steam64_ids: vec![],
+                game_finished_at: Utc::now() - chrono::Duration::days(days_ago),
+                map_name: "de_nuke".to_string(),
+                match_result: match_result.to_string(),
+                scores: (13, 9),
+                skill_level: None,
+                teammates_flashed: None,
+                rounds_count: None,
+            }
+        };
 
-                LeetifyGame {
-                    id: None,
-                    own_team_steam64_ids,
-                    game_finished_at: Utc::now() - chrono::Duration::days(days_ago),
-                    map_name: "de_nuke".to_string(),
-                    match_result: match_result.to_string(),
-                    scores: (13, 9),
-                    skill_level: None,
-                    teammates_flashed: None,
-                    rounds_count: None,
-                }
-            };
-
-        let mut games = vec![
-            make_game(31, vec![alice_steamid.clone()], "win"),
-            make_game(0, vec![alice_steamid.clone()], "win"),
-            make_game(1, vec![alice_steamid.clone()], "win"),
-            make_game(2, vec![alice_steamid.clone()], "loss"),
-            make_game(3, vec![bob_steamid.clone()], "win"),
-            make_game(4, vec![bob_steamid.clone()], "loss"),
-            make_game(5, vec![bob_steamid, outsider_steamid], "loss"),
-            make_game(6, vec![alice_steamid], "tie"),
+        let mut own_games = vec![
+            make_game("alice-old", 31, "win"),
+            make_game("alice-win-1", 0, "win"),
+            make_game("alice-win-2", 1, "win"),
+            make_game("alice-loss", 2, "loss"),
+            make_game("bob-win", 3, "win"),
+            make_game("bob-loss-1", 4, "loss"),
+            make_game("bob-loss-2", 5, "loss"),
+            make_game("alice-tie", 6, "tie"),
         ];
-        games.extend((7..37).map(|days_ago| make_game(days_ago, vec![], "win")));
+        own_games.extend(
+            (7..37).map(|days_ago| make_game(&format!("solo-{days_ago}"), days_ago, "win")),
+        );
 
-        let stats = teammate_stats_from_games(&games, &steamid_mappings, &own_steamid);
+        let mut configured_games = HashMap::new();
+        configured_games.insert(own_steamid.clone(), own_games);
+        configured_games.insert(
+            alice_steamid,
+            vec![
+                make_game("alice-old", 31, "win"),
+                make_game("alice-win-1", 0, "win"),
+                make_game("alice-win-2", 1, "win"),
+                make_game("alice-loss", 2, "loss"),
+                make_game("alice-tie", 6, "tie"),
+            ],
+        );
+        configured_games.insert(
+            bob_steamid,
+            vec![
+                make_game("bob-win", 3, "win"),
+                make_game("bob-loss-1", 4, "loss"),
+                make_game("bob-loss-2", 5, "loss"),
+            ],
+        );
+
+        let stats = teammate_stats_from_configured_games(
+            configured_games.get(&own_steamid).unwrap(),
+            &configured_games,
+            &steamid_mappings,
+            &own_steamid,
+        );
 
         let most_wins = stats.most_wins_with.expect("a teammate should have wins");
         assert_eq!(most_wins.username, Username::new("alice".to_string()));
