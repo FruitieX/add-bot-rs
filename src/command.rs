@@ -14,6 +14,7 @@ The following commands are supported:
 - /1930         Add/remove player from timed queue at 19:30.
 - /add          Add/remove player from the instant queue.
 - /ls           List existing queues.
+- /predict      Predicted win rates for current queues.
 - /rm           Remove yourself from all queues.
 - /lastplayed   Last played game stats for player.
 - /stats        Leetify stats for player.
@@ -47,6 +48,9 @@ pub enum Command {
 
     /// Lists chat queues.
     List,
+
+    /// Predicted win rates for queues in the current chat.
+    Predictions,
 
     /// Leetify stats for user
     Stats {
@@ -183,6 +187,9 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" | "version" | "v" | "start" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
+            "predict" | "prediction" | "predictions" | "winpct" => {
+                Some(Command::Predictions)
+            }
             "statistics" | "stats" => {
                 let for_user = args.and_then(parse_username_arg);
 

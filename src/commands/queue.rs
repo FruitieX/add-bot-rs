@@ -1,10 +1,13 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use chrono::{NaiveTime, Timelike, Utc};
 use chrono_tz::Tz;
 use teloxide::{types::ChatId, Bot};
 
 use crate::{
+    services,
+    settings::Settings,
     state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue, State},
     state_container::StateContainer,
     types::{QueueId, Username},
@@ -178,5 +181,126 @@ pub fn list(state: State, chat_id: ChatId, tz: &Tz) -> String {
             make_queue_strings(queues).join("\n")
         }
         _ => String::from("No active queues."),
+    }
+}
+
+fn recent_win_rate(matches: &[services::leetify::RecentMatch]) -> Option<f32> {
+    let matches = matches.iter().take(services::leetify::RECENT_MATCHES_LIMIT);
+    let wins = matches
+        .clone()
+        .filter(|m| matches!(&m.result, services::leetify::MatchResult::Win))
+        .count();
+    let losses = matches
+        .filter(|m| matches!(&m.result, services::leetify::MatchResult::Loss))
+        .count();
+    let decisive_matches = wins + losses;
+
+    (decisive_matches > 0).then(|| wins as f32 / decisive_matches as f32 * 100.0)
+}
+
+pub async fn predictions(settings: &Settings, state: State, chat_id: ChatId, tz: &Tz) -> String {
+    let Some(chat) = state.chats.get(&chat_id) else {
+        return "No active queues.".to_string();
+    };
+
+    if chat.queues.is_empty() {
+        return "No active queues.".to_string();
+    }
+
+    let mut queues: Vec<(QueueId, Queue)> = chat
+        .queues
+        .iter()
+        .map(|(queue_id, queue)| (queue_id.clone(), queue.clone()))
+        .collect();
+    let current_time = Utc::now().with_timezone(tz).time();
+    queues.sort_by(|(_, a), (_, b)| {
+        let a_next_day = a.timeout < current_time;
+        let b_next_day = b.timeout < current_time;
+
+        if a_next_day == b_next_day {
+            a.timeout.cmp(&b.timeout)
+        } else if a_next_day {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        }
+    });
+
+    let usernames: Vec<Username> = queues
+        .iter()
+        .flat_map(|(_, queue)| queue.get_players().0)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let profile_requests = usernames.into_iter().map(|username| {
+        let settings = settings.clone();
+        async move {
+            let rate = match services::leetify::player_stats(&settings, &username).await {
+                Ok(profile) => recent_win_rate(&profile.recent_matches),
+                Err(e) => {
+                    eprintln!("Failed to fetch prediction stats for {username}: {e}");
+                    None
+                }
+            };
+            (username, rate)
+        }
+    });
+    let player_rates: HashMap<Username, Option<f32>> = futures::future::join_all(profile_requests)
+        .await
+        .into_iter()
+        .collect();
+
+    let queue_lines = queues
+        .iter()
+        .map(|(queue_id, queue)| {
+            let players = queue.get_players().0;
+            let rates = players
+                .iter()
+                .filter_map(|username| player_rates.get(username).copied().flatten())
+                .collect::<Vec<_>>();
+
+            if rates.len() != players.len() {
+                format!(
+                    "- {queue_id}: unavailable ({}/{} player profiles)",
+                    rates.len(),
+                    players.len()
+                )
+            } else {
+                let predicted_win_rate = rates.iter().sum::<f32>() / rates.len() as f32;
+                format!(
+                    "- {queue_id}: {predicted_win_rate:.0}% ({}/{} players)",
+                    players.len(),
+                    queue.size()
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "Predicted win rates for current queues:\n(average of player win rates from last {} matches)\n\n{queue_lines}",
+        services::leetify::RECENT_MATCHES_LIMIT
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_win_rate_ignores_ties() {
+        let matches = vec![
+            services::leetify::RecentMatch {
+                result: services::leetify::MatchResult::Win,
+            },
+            services::leetify::RecentMatch {
+                result: services::leetify::MatchResult::Loss,
+            },
+            services::leetify::RecentMatch {
+                result: services::leetify::MatchResult::Tie,
+            },
+        ];
+
+        assert_eq!(recent_win_rate(&matches), Some(50.0));
     }
 }

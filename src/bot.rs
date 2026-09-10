@@ -2,7 +2,7 @@ use crate::{
     command::Command,
     commands::{
         activity::get_activity_inputfile,
-        queue::{add_remove, list, remove_all},
+        queue::{add_remove, list, predictions, remove_all},
         sahko::get_sahko_inputfile,
         stats::{
             hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats,
@@ -44,6 +44,7 @@ pub async fn handle_cmd(
             remove_all(username, state, chat_id, &sc).await
         }
         Command::List => list(state, chat_id, &tz),
+        Command::Predictions => predictions(&settings, state, chat_id, &tz).await,
         Command::Stats { for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
             stats(&settings, &username).await
