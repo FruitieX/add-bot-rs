@@ -196,6 +196,24 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     format!("{results} ({wins}W/{losses}L/{ties}T, {win_percentage:.0}% win rate)")
 }
 
+fn format_teammate_result(entry: Option<&services::leetify::TeammateStatsEntry>) -> String {
+    let Some(entry) = entry else {
+        return "none".to_string();
+    };
+
+    format!("{} ({}W/{}L)", entry.username, entry.wins, entry.losses)
+}
+
+fn format_teammate_stats(stats: &services::leetify::TeammateStats) -> String {
+    let most_wins = format_teammate_result(stats.most_wins_with.as_ref());
+    let most_losses = format_teammate_result(stats.most_losses_with.as_ref());
+
+    format!(
+        "Teammates from last {} matches:\n- Most wins with: {most_wins}\n- Most losses with: {most_losses}",
+        services::leetify::RECENT_MATCHES_LIMIT
+    )
+}
+
 pub async fn stats(settings: &Settings, username: &Username) -> String {
     let res = services::leetify::player_stats(settings, username).await;
 
@@ -224,8 +242,18 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
                 .map(|r| r.to_string())
                 .unwrap_or("N/A".to_string());
             let recent_results = format_recent_results(&stats.recent_matches);
+            let teammate_stats = match services::leetify::teammate_stats(settings, username).await {
+                Ok(teammate_stats) => format_teammate_stats(&teammate_stats),
+                Err(e) => {
+                    eprintln!("Failed to fetch teammate stats from Leetify: {}", e);
+                    format!(
+                        "Teammates from last {} matches: unavailable",
+                        services::leetify::RECENT_MATCHES_LIMIT
+                    )
+                }
+            };
 
-            let text = format!("Stats for {username} from last 30 matches:\n- CT Leetify rating: {ct_leetify}\n- T Leetify rating: {t_leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}\n- Recent results: {recent_results}");
+            let text = format!("Stats for {username} from last 30 matches:\n- CT Leetify rating: {ct_leetify}\n- T Leetify rating: {t_leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}\n- Recent results: {recent_results}\n\n{teammate_stats}");
             text
         }
         Err(e) => {
