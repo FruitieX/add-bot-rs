@@ -514,6 +514,7 @@ pub async fn player_stats(settings: &Settings, username: &Username) -> Result<Le
 }
 
 pub const RECENT_MATCHES_LIMIT: usize = 30;
+const TEAMMATE_RANKING_LIMIT: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TeammateStatsEntry {
@@ -523,14 +524,14 @@ pub struct TeammateStatsEntry {
 }
 
 pub struct TeammateStats {
-    pub best_win_rate_with: Option<TeammateStatsEntry>,
-    pub worst_win_rate_with: Option<TeammateStatsEntry>,
+    pub best_win_rates_with: Vec<TeammateStatsEntry>,
+    pub worst_win_rates_with: Vec<TeammateStatsEntry>,
 }
 
 fn best_teammate_by_win_rate(
     mut entries: Vec<TeammateStatsEntry>,
     highest: bool,
-) -> Option<TeammateStatsEntry> {
+) -> Vec<TeammateStatsEntry> {
     entries.retain(|entry| entry.wins + entry.losses > 0);
     entries.sort_by(|a, b| {
         let a_matches = a.wins + a.losses;
@@ -547,7 +548,8 @@ fn best_teammate_by_win_rate(
             .then_with(|| a.username.to_string().cmp(&b.username.to_string()))
     });
 
-    entries.into_iter().next()
+    entries.truncate(TEAMMATE_RANKING_LIMIT);
+    entries
 }
 
 fn teammate_stats_from_configured_games(
@@ -608,8 +610,8 @@ fn teammate_stats_from_configured_games(
     let entries: Vec<TeammateStatsEntry> = entries.into_values().collect();
 
     TeammateStats {
-        best_win_rate_with: best_teammate_by_win_rate(entries.clone(), true),
-        worst_win_rate_with: best_teammate_by_win_rate(entries, false),
+        best_win_rates_with: best_teammate_by_win_rate(entries.clone(), true),
+        worst_win_rates_with: best_teammate_by_win_rate(entries, false),
     }
 }
 
@@ -1197,16 +1199,14 @@ mod tests {
             &own_steamid,
         );
 
-        let best_win_rate = stats
-            .best_win_rate_with
-            .expect("a teammate should have wins");
+        assert_eq!(stats.best_win_rates_with.len(), 3);
+        let best_win_rate = &stats.best_win_rates_with[0];
         assert_eq!(best_win_rate.username, Username::new("carol".to_string()));
         assert_eq!(best_win_rate.wins, 2);
         assert_eq!(best_win_rate.losses, 0);
 
-        let worst_win_rate = stats
-            .worst_win_rate_with
-            .expect("a teammate should have losses");
+        assert_eq!(stats.worst_win_rates_with.len(), 3);
+        let worst_win_rate = &stats.worst_win_rates_with[0];
         assert_eq!(worst_win_rate.username, Username::new("dave".to_string()));
         assert_eq!(worst_win_rate.wins, 0);
         assert_eq!(worst_win_rate.losses, 1);

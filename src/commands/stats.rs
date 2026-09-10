@@ -196,11 +196,7 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     format!("{results} ({wins}W/{losses}L/{ties}T, {win_percentage:.0}% win rate)")
 }
 
-fn format_teammate_result(entry: Option<&services::leetify::TeammateStatsEntry>) -> String {
-    let Some(entry) = entry else {
-        return "none".to_string();
-    };
-
+fn format_teammate_result(entry: &services::leetify::TeammateStatsEntry) -> String {
     let matches = entry.wins + entry.losses;
     let win_rate = entry.wins as f32 / matches as f32 * 100.0;
 
@@ -210,12 +206,24 @@ fn format_teammate_result(entry: Option<&services::leetify::TeammateStatsEntry>)
     )
 }
 
+fn format_teammate_results(entries: &[services::leetify::TeammateStatsEntry]) -> String {
+    if entries.is_empty() {
+        return "none".to_string();
+    }
+
+    entries
+        .iter()
+        .map(format_teammate_result)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn format_teammate_stats(stats: &services::leetify::TeammateStats) -> String {
-    let best_win_rate = format_teammate_result(stats.best_win_rate_with.as_ref());
-    let worst_win_rate = format_teammate_result(stats.worst_win_rate_with.as_ref());
+    let best_win_rates = format_teammate_results(&stats.best_win_rates_with);
+    let worst_win_rates = format_teammate_results(&stats.worst_win_rates_with);
 
     format!(
-        "Teammates from last {} matches:\n- Best win rate with: {best_win_rate}\n- Worst win rate with: {worst_win_rate}",
+        "Teammates from last {} matches:\n- Best: {best_win_rates}\n- Worst: {worst_win_rates}",
         services::leetify::RECENT_MATCHES_LIMIT
     )
 }
