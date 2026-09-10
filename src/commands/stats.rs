@@ -201,15 +201,21 @@ fn format_teammate_result(entry: Option<&services::leetify::TeammateStatsEntry>)
         return "none".to_string();
     };
 
-    format!("{} ({}W/{}L)", entry.username, entry.wins, entry.losses)
+    let matches = entry.wins + entry.losses;
+    let win_rate = entry.wins as f32 / matches as f32 * 100.0;
+
+    format!(
+        "{} ({}W/{}L, {win_rate:.0}% win rate)",
+        entry.username, entry.wins, entry.losses
+    )
 }
 
 fn format_teammate_stats(stats: &services::leetify::TeammateStats) -> String {
-    let most_wins = format_teammate_result(stats.most_wins_with.as_ref());
-    let most_losses = format_teammate_result(stats.most_losses_with.as_ref());
+    let best_win_rate = format_teammate_result(stats.best_win_rate_with.as_ref());
+    let worst_win_rate = format_teammate_result(stats.worst_win_rate_with.as_ref());
 
     format!(
-        "Teammates from last {} matches:\n- Most wins with: {most_wins}\n- Most losses with: {most_losses}",
+        "Teammates from last {} matches:\n- Best win rate with: {best_win_rate}\n- Worst win rate with: {worst_win_rate}",
         services::leetify::RECENT_MATCHES_LIMIT
     )
 }

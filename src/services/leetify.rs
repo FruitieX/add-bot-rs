@@ -523,27 +523,31 @@ pub struct TeammateStatsEntry {
 }
 
 pub struct TeammateStats {
-    pub most_wins_with: Option<TeammateStatsEntry>,
-    pub most_losses_with: Option<TeammateStatsEntry>,
+    pub best_win_rate_with: Option<TeammateStatsEntry>,
+    pub worst_win_rate_with: Option<TeammateStatsEntry>,
 }
 
-fn best_teammate(mut entries: Vec<TeammateStatsEntry>, wins: bool) -> Option<TeammateStatsEntry> {
+fn best_teammate_by_win_rate(
+    mut entries: Vec<TeammateStatsEntry>,
+    highest: bool,
+) -> Option<TeammateStatsEntry> {
+    entries.retain(|entry| entry.wins + entry.losses > 0);
     entries.sort_by(|a, b| {
-        let a_count = if wins { a.wins } else { a.losses };
-        let b_count = if wins { b.wins } else { b.losses };
+        let a_matches = a.wins + a.losses;
+        let b_matches = b.wins + b.losses;
+        let win_rate_cmp = (b.wins * a_matches).cmp(&(a.wins * b_matches));
+        let win_rate_cmp = if highest {
+            win_rate_cmp
+        } else {
+            win_rate_cmp.reverse()
+        };
 
-        b_count
-            .cmp(&a_count)
+        win_rate_cmp
+            .then_with(|| b_matches.cmp(&a_matches))
             .then_with(|| a.username.to_string().cmp(&b.username.to_string()))
     });
 
-    entries.into_iter().find(|entry| {
-        if wins {
-            entry.wins > 0
-        } else {
-            entry.losses > 0
-        }
-    })
+    entries.into_iter().next()
 }
 
 fn teammate_stats_from_configured_games(
@@ -604,8 +608,8 @@ fn teammate_stats_from_configured_games(
     let entries: Vec<TeammateStatsEntry> = entries.into_values().collect();
 
     TeammateStats {
-        most_wins_with: best_teammate(entries.clone(), true),
-        most_losses_with: best_teammate(entries, false),
+        best_win_rate_with: best_teammate_by_win_rate(entries.clone(), true),
+        worst_win_rate_with: best_teammate_by_win_rate(entries, false),
     }
 }
 
@@ -1112,15 +1116,19 @@ mod tests {
     }
 
     #[test]
-    fn teammate_stats_count_recent_shared_matches() {
+    fn teammate_stats_rank_by_win_rate_for_recent_shared_matches() {
         let own_steamid = SteamID::new("own".to_string());
         let alice_steamid = SteamID::new("alice".to_string());
         let bob_steamid = SteamID::new("bob".to_string());
+        let carol_steamid = SteamID::new("carol".to_string());
+        let dave_steamid = SteamID::new("dave".to_string());
 
         let mut steamid_mappings = HashMap::new();
         steamid_mappings.insert(Username::new("player".to_string()), own_steamid.clone());
         steamid_mappings.insert(Username::new("alice".to_string()), alice_steamid.clone());
         steamid_mappings.insert(Username::new("bob".to_string()), bob_steamid.clone());
+        steamid_mappings.insert(Username::new("carol".to_string()), carol_steamid.clone());
+        steamid_mappings.insert(Username::new("dave".to_string()), dave_steamid.clone());
 
         let make_game = |id: &str, days_ago: i64, match_result: &str| -> LeetifyGame {
             LeetifyGame {
@@ -1145,9 +1153,12 @@ mod tests {
             make_game("bob-loss-1", 4, "loss"),
             make_game("bob-loss-2", 5, "loss"),
             make_game("alice-tie", 6, "tie"),
+            make_game("carol-win-1", 7, "win"),
+            make_game("carol-win-2", 8, "win"),
+            make_game("dave-loss", 9, "loss"),
         ];
         own_games.extend(
-            (7..37).map(|days_ago| make_game(&format!("solo-{days_ago}"), days_ago, "win")),
+            (10..38).map(|days_ago| make_game(&format!("solo-{days_ago}"), days_ago, "win")),
         );
 
         let mut configured_games = HashMap::new();
@@ -1170,6 +1181,14 @@ mod tests {
                 make_game("bob-loss-2", 5, "loss"),
             ],
         );
+        configured_games.insert(
+            carol_steamid,
+            vec![
+                make_game("carol-win-1", 7, "win"),
+                make_game("carol-win-2", 8, "win"),
+            ],
+        );
+        configured_games.insert(dave_steamid, vec![make_game("dave-loss", 9, "loss")]);
 
         let stats = teammate_stats_from_configured_games(
             configured_games.get(&own_steamid).unwrap(),
@@ -1178,17 +1197,19 @@ mod tests {
             &own_steamid,
         );
 
-        let most_wins = stats.most_wins_with.expect("a teammate should have wins");
-        assert_eq!(most_wins.username, Username::new("alice".to_string()));
-        assert_eq!(most_wins.wins, 2);
-        assert_eq!(most_wins.losses, 1);
+        let best_win_rate = stats
+            .best_win_rate_with
+            .expect("a teammate should have wins");
+        assert_eq!(best_win_rate.username, Username::new("carol".to_string()));
+        assert_eq!(best_win_rate.wins, 2);
+        assert_eq!(best_win_rate.losses, 0);
 
-        let most_losses = stats
-            .most_losses_with
+        let worst_win_rate = stats
+            .worst_win_rate_with
             .expect("a teammate should have losses");
-        assert_eq!(most_losses.username, Username::new("bob".to_string()));
-        assert_eq!(most_losses.wins, 1);
-        assert_eq!(most_losses.losses, 2);
+        assert_eq!(worst_win_rate.username, Username::new("dave".to_string()));
+        assert_eq!(worst_win_rate.wins, 0);
+        assert_eq!(worst_win_rate.losses, 1);
     }
 
     #[tokio::test]
