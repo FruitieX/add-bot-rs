@@ -415,9 +415,10 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> String {
                     let value = entry.teammates_flashed_per_round;
 
                     let thrown = entry.flashbangs_thrown_per_round;
+                    let ratio = entry.teammates_flashed_per_flash;
 
                     format!(
-                        "{pos}: {username} ({thrown:.2} thrown, {value:.2} teammates hit / round)"
+                        "{pos}: {username} ({thrown:.2} thrown, {value:.2} teammates hit / round, {ratio:.2} hit / flash)"
                     )
                 })
                 .collect::<Vec<String>>()
@@ -430,8 +431,9 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> String {
             let avg = leaderboard.avg;
 
             format!(
-                "Flashbangs per round 💥\n(thrown, teammates hit)\n\n{list}\n\nAvg: {thrown_avg:.2} thrown, {avg:.2} teammates hit / round",
-                thrown_avg = leaderboard.avg_flashbangs_thrown
+                "Flashbangs per round 💥\n(thrown, teammates hit, hit / flash)\n\n{list}\n\nAvg: {thrown_avg:.2} thrown, {avg:.2} teammates hit / round, {ratio_avg:.2} hit / flash",
+                thrown_avg = leaderboard.avg_flashbangs_thrown,
+                ratio_avg = leaderboard.avg_teammates_flashed_per_flash
             )
         }
         Err(e) => {

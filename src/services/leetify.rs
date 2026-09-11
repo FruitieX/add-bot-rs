@@ -858,12 +858,14 @@ pub struct TeamFlashEntry {
     pub username: Username,
     pub flashbangs_thrown_per_round: f32,
     pub teammates_flashed_per_round: f32,
+    pub teammates_flashed_per_flash: f32,
 }
 
 pub struct TeamFlashLeaderboard {
     pub entries: Vec<TeamFlashEntry>,
     pub avg_flashbangs_thrown: f32,
     pub avg: f32,
+    pub avg_teammates_flashed_per_flash: f32,
 }
 
 /// List players ranked by teammates flashed per round (highest = most team flashes = worst)
@@ -898,10 +900,20 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
                     (
                         thrown as f32 / rounds as f32,
                         flashes as f32 / rounds as f32,
+                        if thrown > 0 {
+                            flashes as f32 / thrown as f32
+                        } else {
+                            0.0
+                        },
                     )
                 });
 
-                let Some((flashbangs_thrown_per_round, teammates_flashed_per_round)) = rates else {
+                let Some((
+                    flashbangs_thrown_per_round,
+                    teammates_flashed_per_round,
+                    teammates_flashed_per_flash,
+                )) = rates
+                else {
                     eprintln!("Failed to find flashbang rates for player {username}");
                     return None;
                 };
@@ -910,6 +922,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
                     username: username.clone(),
                     flashbangs_thrown_per_round,
                     teammates_flashed_per_round,
+                    teammates_flashed_per_flash,
                 })
             }
         })
@@ -935,6 +948,10 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
         .iter()
         .map(|e| e.flashbangs_thrown_per_round)
         .collect();
+    let per_flash_values: Vec<f32> = entries
+        .iter()
+        .map(|e| e.teammates_flashed_per_flash)
+        .collect();
     let avg = if values.is_empty() {
         0.0
     } else {
@@ -945,11 +962,17 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
     } else {
         thrown_values.iter().sum::<f32>() / thrown_values.len() as f32
     };
+    let avg_teammates_flashed_per_flash = if per_flash_values.is_empty() {
+        0.0
+    } else {
+        per_flash_values.iter().sum::<f32>() / per_flash_values.len() as f32
+    };
 
     Ok(TeamFlashLeaderboard {
         entries,
         avg_flashbangs_thrown,
         avg,
+        avg_teammates_flashed_per_flash,
     })
 }
 
