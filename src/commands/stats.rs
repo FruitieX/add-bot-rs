@@ -414,7 +414,11 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> String {
                     let pos = index_to_shame_pos(index);
                     let value = entry.teammates_flashed_per_round;
 
-                    format!("{pos}: {username} ({value:.2}/round)")
+                    let thrown = entry.flashbangs_thrown_per_round;
+
+                    format!(
+                        "{pos}: {username} ({thrown:.2} thrown, {value:.2} teammates hit / round)"
+                    )
                 })
                 .collect::<Vec<String>>()
                 .join("\n");
@@ -426,7 +430,8 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> String {
             let avg = leaderboard.avg;
 
             format!(
-                "Team Flash Hall of Shame 💥\n(teammates flashed per round)\n\n{list}\n\nAvg: {avg:.2}/round"
+                "Flashbangs per round 💥\n(thrown, teammates hit)\n\n{list}\n\nAvg: {thrown_avg:.2} thrown, {avg:.2} teammates hit / round",
+                thrown_avg = leaderboard.avg_flashbangs_thrown
             )
         }
         Err(e) => {

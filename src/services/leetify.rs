@@ -133,6 +133,8 @@ struct PublicPlayerMatchStats {
     #[serde(default)]
     flashbang_hit_friend: u32,
     #[serde(default)]
+    flashbang_thrown: u32,
+    #[serde(default)]
     rounds_count: u32,
 }
 
@@ -202,6 +204,7 @@ fn public_match_to_game(game: PublicMatch, steam_id: &SteamID) -> Option<Leetify
         scores: (own_score, opponent_score),
         skill_level: None,
         teammates_flashed: Some(player.flashbang_hit_friend),
+        flashbangs_thrown: Some(player.flashbang_thrown),
         rounds_count: Some(player.rounds_count),
     })
 }
@@ -358,6 +361,8 @@ pub struct LeetifyGame {
     pub skill_level: Option<u32>,
     #[serde(default)]
     pub teammates_flashed: Option<u32>,
+    #[serde(default)]
+    pub flashbangs_thrown: Option<u32>,
     #[serde(default)]
     pub rounds_count: Option<u32>,
 }
@@ -851,11 +856,13 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
 #[derive(Debug)]
 pub struct TeamFlashEntry {
     pub username: Username,
+    pub flashbangs_thrown_per_round: f32,
     pub teammates_flashed_per_round: f32,
 }
 
 pub struct TeamFlashLeaderboard {
     pub entries: Vec<TeamFlashEntry>,
+    pub avg_flashbangs_thrown: f32,
     pub avg: f32,
 }
 
@@ -876,23 +883,32 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
                     return None;
                 };
 
-                // The public API exposes total friendly flash hits and round counts per match.
-                let (flashes, rounds) =
-                    games.iter().fold((0u32, 0u32), |(flashes, rounds), game| {
-                        (
-                            flashes + game.teammates_flashed.unwrap_or_default(),
-                            rounds + game.rounds_count.unwrap_or_default(),
-                        )
-                    });
-                let teammates_flashed = (rounds > 0).then(|| flashes as f32 / rounds as f32);
+                // The public API exposes total flashbangs thrown, friendly flash hits, and round counts per match.
+                let (thrown, flashes, rounds) =
+                    games
+                        .iter()
+                        .fold((0u32, 0u32, 0u32), |(thrown, flashes, rounds), game| {
+                            (
+                                thrown + game.flashbangs_thrown.unwrap_or_default(),
+                                flashes + game.teammates_flashed.unwrap_or_default(),
+                                rounds + game.rounds_count.unwrap_or_default(),
+                            )
+                        });
+                let rates = (rounds > 0).then(|| {
+                    (
+                        thrown as f32 / rounds as f32,
+                        flashes as f32 / rounds as f32,
+                    )
+                });
 
-                let Some(teammates_flashed_per_round) = teammates_flashed else {
-                    eprintln!("Failed to find teammatesFlashedPerRound for player {username}");
+                let Some((flashbangs_thrown_per_round, teammates_flashed_per_round)) = rates else {
+                    eprintln!("Failed to find flashbang rates for player {username}");
                     return None;
                 };
 
                 Some(TeamFlashEntry {
                     username: username.clone(),
+                    flashbangs_thrown_per_round,
                     teammates_flashed_per_round,
                 })
             }
@@ -915,13 +931,26 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
         .iter()
         .map(|e| e.teammates_flashed_per_round)
         .collect();
+    let thrown_values: Vec<f32> = entries
+        .iter()
+        .map(|e| e.flashbangs_thrown_per_round)
+        .collect();
     let avg = if values.is_empty() {
         0.0
     } else {
         values.iter().sum::<f32>() / values.len() as f32
     };
+    let avg_flashbangs_thrown = if thrown_values.is_empty() {
+        0.0
+    } else {
+        thrown_values.iter().sum::<f32>() / thrown_values.len() as f32
+    };
 
-    Ok(TeamFlashLeaderboard { entries, avg })
+    Ok(TeamFlashLeaderboard {
+        entries,
+        avg_flashbangs_thrown,
+        avg,
+    })
 }
 
 #[cfg(test)]
@@ -1013,6 +1042,7 @@ mod tests {
                 "name": "fixture",
                 "initial_team_number": 3,
                 "flashbang_hit_friend": 4,
+                "flashbang_thrown": 8,
                 "rounds_count": 22
               }]
             }
@@ -1027,6 +1057,7 @@ mod tests {
         assert_eq!(game.scores, (9, 13));
         assert_eq!(game.match_result, "loss");
         assert_eq!(game.teammates_flashed, Some(4));
+        assert_eq!(game.flashbangs_thrown, Some(8));
         assert_eq!(game.rounds_count, Some(22));
     }
 
@@ -1041,6 +1072,7 @@ mod tests {
             scores: (13, 9),
             skill_level: None,
             teammates_flashed: None,
+            flashbangs_thrown: None,
             rounds_count: None,
         };
         let today = Utc::now().date_naive();
@@ -1080,6 +1112,7 @@ mod tests {
             scores: (13, 9),
             skill_level: None,
             teammates_flashed: None,
+            flashbangs_thrown: None,
             rounds_count: None,
         };
 
@@ -1106,6 +1139,7 @@ mod tests {
             scores: (13, 9),
             skill_level: None,
             teammates_flashed: None,
+            flashbangs_thrown: None,
             rounds_count: None,
         };
 
@@ -1142,6 +1176,7 @@ mod tests {
                 scores: (13, 9),
                 skill_level: None,
                 teammates_flashed: None,
+                flashbangs_thrown: None,
                 rounds_count: None,
             }
         };

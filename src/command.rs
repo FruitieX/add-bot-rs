@@ -25,7 +25,8 @@ The following commands are supported:
 - /utility      Leaderboard by utility usage.
 - /opening      Leaderboard by opening duels.
 - /clutch       Leaderboard by clutch rating.
-- /teamflash    Team flash hall of shame.
+- /teamflash    Flashbangs thrown and teammates flashed per round.
+- /flashes      Flashbangs thrown and teammates flashed per round.
 - /activity     Daily games played by all players (last 365 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
@@ -187,9 +188,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" | "version" | "v" | "start" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "predict" | "prediction" | "predictions" | "winpct" => {
-                Some(Command::Predictions)
-            }
+            "predict" | "prediction" | "predictions" | "winpct" => Some(Command::Predictions),
             "statistics" | "stats" => {
                 let for_user = args.and_then(parse_username_arg);
 
@@ -210,7 +209,7 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "clutch" | "clutches" => Some(Command::StatLeaderboard {
                 stat_type: "clutch".to_string(),
             }),
-            "teamflash" | "tf" | "flash" | "blind" => Some(Command::TeamFlash),
+            "teamflash" | "tf" | "flash" | "flashes" | "blind" => Some(Command::TeamFlash),
             "hallofshame" | "wallofshame" | "shame" => Some(Command::HallOfShame),
             "halloffame" | "walloffame" | "fame" | "top" | "top10" | "ranks" | "premier" => {
                 Some(Command::HallOfFame {
