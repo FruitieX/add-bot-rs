@@ -3,7 +3,7 @@ use crate::{
     commands::{
         activity::get_activity_inputfile,
         queue::{add_remove, list, predictions, remove_all},
-        sahko::get_sahko_inputfile,
+        sahko::{get_sahko_inputfile, queue_cost_message},
         stats::{
             hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats,
             team_flash_leaderboard,
@@ -67,6 +67,9 @@ pub async fn handle_cmd(
             };
 
             send_photo(&bot, &chat_id, photo).await;
+            if let Some(cost_message) = queue_cost_message(&settings, &state, chat_id, &tz).await {
+                send_msg(&bot, &chat_id, &cost_message, false).await;
+            }
             return Some(());
         }
         Command::Activity { for_user } => {

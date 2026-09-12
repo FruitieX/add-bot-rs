@@ -24,6 +24,73 @@ fn fmt_y_axis(y: &f32) -> String {
     format!("{y:.0}")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnergyCostEstimate {
+    pub energy_kwh: f64,
+    pub spot_cost_eur: f64,
+    pub distribution_cost_eur: f64,
+    pub total_cost_eur: f64,
+}
+
+/// Calculates the variable energy cost for a future interval.
+///
+/// `HourlyPrice::price` is expressed in cents/kWh even though the upstream
+/// endpoint uses 15-minute intervals. Costs are prorated when the requested
+/// interval does not align with a price slot.
+pub fn estimate_energy_cost(
+    prices: &[HourlyPrice],
+    start: DateTime<Utc>,
+    duration_minutes: f64,
+    power_watts: f64,
+    distribution_cents_per_kwh: f64,
+) -> Result<EnergyCostEstimate> {
+    if duration_minutes <= 0.0 {
+        return Err(eyre!("Match duration must be positive"));
+    }
+    if power_watts < 0.0 || distribution_cents_per_kwh < 0.0 {
+        return Err(eyre!("Power and distribution cost must not be negative"));
+    }
+
+    let duration = Duration::milliseconds((duration_minutes * 60_000.0).round() as i64);
+    let end = start + duration;
+    let requested_seconds = duration.num_seconds();
+    let mut covered_seconds = 0i64;
+    let mut energy_kwh = 0.0;
+    let mut spot_cost_eur = 0.0;
+    let power_kw = power_watts / 1_000.0;
+
+    for price in prices {
+        let slot_start = price.start_date;
+        let slot_end = slot_start + Duration::minutes(15);
+        let overlap_start = start.max(slot_start);
+        let overlap_end = end.min(slot_end);
+        let overlap_seconds = (overlap_end - overlap_start).num_seconds();
+
+        if overlap_seconds <= 0 {
+            continue;
+        }
+
+        let slot_energy_kwh = power_kw * overlap_seconds as f64 / 3_600.0;
+        energy_kwh += slot_energy_kwh;
+        spot_cost_eur += slot_energy_kwh * f64::from(price.price) / 100.0;
+        covered_seconds += overlap_seconds;
+    }
+
+    if covered_seconds < requested_seconds {
+        return Err(eyre!(
+            "Spot-price data does not cover the complete match interval"
+        ));
+    }
+
+    let distribution_cost_eur = energy_kwh * distribution_cents_per_kwh / 100.0;
+
+    Ok(EnergyCostEstimate {
+        energy_kwh,
+        spot_cost_eur,
+        distribution_cost_eur,
+        total_cost_eur: spot_cost_eur + distribution_cost_eur,
+    })
+}
 #[cached(result = true, time = 1)]
 pub async fn get_price_chart() -> Result<Vec<u8>> {
     // Get prices
@@ -182,7 +249,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
 
             // Draw the red step segment for the current interval
             ctx.draw_series(LineSeries::new(
-                vec![(seg_start, seg_price), (seg_end, seg_price)].into_iter(),
+                vec![(seg_start, seg_price), (seg_end, seg_price)],
                 ShapeStyle::from(&RED).stroke_width(2),
             ))?;
 
@@ -197,8 +264,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
                 vec![
                     (seg_mid, seg_price + y_offset_val / 10.0),
                     (seg_mid, seg_price + y_offset_val),
-                ]
-                .into_iter(),
+                ],
                 BLACK.mix(0.3).filled().stroke_width(1),
             ))?;
 
@@ -302,7 +368,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
 }
 
 #[cached(result = true, time = 60)]
-async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
+pub(crate) async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
     println!("Fetching latest sahko prices");
     let url = "https://api.porssisahko.net/v2/latest-prices.json";
     let resp: PricesResult = reqwest::get(url).await?.json().await?;
@@ -344,6 +410,44 @@ struct PricesResult {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn energy_cost_prorates_spot_prices_and_adds_distribution() {
+        let start = chrono::DateTime::parse_from_rfc3339("2026-09-12T18:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let prices = vec![
+            HourlyPrice {
+                price: 10.0,
+                start_date: start,
+            },
+            HourlyPrice {
+                price: 20.0,
+                start_date: start + Duration::minutes(15),
+            },
+        ];
+
+        let estimate = estimate_energy_cost(&prices, start, 30.0, 1_000.0, 2.0)
+            .expect("price data should cover the match");
+
+        assert!((estimate.energy_kwh - 0.5).abs() < 1e-9);
+        assert!((estimate.spot_cost_eur - 0.075).abs() < 1e-9);
+        assert!((estimate.distribution_cost_eur - 0.01).abs() < 1e-9);
+        assert!((estimate.total_cost_eur - 0.085).abs() < 1e-9);
+    }
+
+    #[test]
+    fn energy_cost_rejects_a_match_outside_available_price_data() {
+        let start = chrono::DateTime::parse_from_rfc3339("2026-09-12T18:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let prices = vec![HourlyPrice {
+            price: 10.0,
+            start_date: start,
+        }];
+
+        assert!(estimate_energy_cost(&prices, start, 30.0, 500.0, 2.0).is_err());
+    }
 
     // This test actually calls the remote API and writes a PNG to /tmp.
     // It's ignored by default because it requires network access and the font asset.

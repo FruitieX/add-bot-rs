@@ -367,6 +367,65 @@ pub struct LeetifyGame {
     pub rounds_count: Option<u32>,
 }
 
+pub const CS2_ESTIMATED_MINUTES_PER_ROUND: f64 = 2.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MatchDurationEstimate {
+    pub matches_used: usize,
+    pub average_rounds: f64,
+    pub minutes: f64,
+}
+
+/// Estimates a typical match length from the newest matches with round data.
+///
+/// Leetify's public match endpoint exposes the number of rounds but not start
+/// time or duration. Two minutes per round includes the round and freeze/buy
+/// phases and is intentionally kept as a visible, tunable assumption.
+pub fn average_recent_match_duration(games: &[LeetifyGame]) -> Option<MatchDurationEstimate> {
+    let mut games = games.iter().collect::<Vec<_>>();
+    games.sort_by_key(|game| std::cmp::Reverse(game.game_finished_at));
+
+    let rounds: Vec<u32> = games
+        .into_iter()
+        .take(RECENT_MATCHES_LIMIT)
+        .filter_map(|game| game.rounds_count.filter(|rounds| *rounds > 0))
+        .collect();
+    let matches_used = rounds.len();
+
+    (matches_used > 0).then(|| {
+        let average_rounds =
+            rounds.iter().map(|rounds| *rounds as f64).sum::<f64>() / matches_used as f64;
+        MatchDurationEstimate {
+            matches_used,
+            average_rounds,
+            minutes: average_rounds * CS2_ESTIMATED_MINUTES_PER_ROUND,
+        }
+    })
+}
+
+/// Fetches configured players' matches and estimates one shared recent-match
+/// duration, deduplicating matches that appear in multiple player histories.
+pub(crate) async fn average_recent_match_duration_for_configured_players(
+    settings: &Settings,
+) -> Option<MatchDurationEstimate> {
+    let configured_games = get_configured_player_games(settings).await;
+    let mut seen_match_ids = HashSet::new();
+    let mut games = Vec::new();
+
+    for player_games in configured_games.values() {
+        for game in player_games {
+            if let Some(id) = &game.id {
+                if !seen_match_ids.insert(id.clone()) {
+                    continue;
+                }
+            }
+            games.push(game.clone());
+        }
+    }
+
+    average_recent_match_duration(&games)
+}
+
 #[derive(Debug)]
 pub struct LastPlayedResult {
     pub game: LeetifyGame,
@@ -979,7 +1038,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{PlayersSettings, TeloxideSettings};
+    use crate::settings::{ElectricitySettings, PlayersSettings, TeloxideSettings};
     use std::collections::HashMap;
 
     const PUBLIC_TEST_STEAM_ID: &str = "76561198016607756";
@@ -1082,6 +1141,51 @@ mod tests {
         assert_eq!(game.teammates_flashed, Some(4));
         assert_eq!(game.flashbangs_thrown, Some(8));
         assert_eq!(game.rounds_count, Some(22));
+    }
+
+    #[test]
+    fn average_recent_match_duration_uses_the_newest_thirty_matches() {
+        let make_game = |id: String, minutes_ago: i64, rounds_count: u32| LeetifyGame {
+            id: Some(id),
+            own_team_steam64_ids: vec![],
+            game_finished_at: Utc::now() - chrono::Duration::minutes(minutes_ago),
+            map_name: "de_nuke".to_string(),
+            match_result: "win".to_string(),
+            scores: (13, 9),
+            skill_level: None,
+            teammates_flashed: None,
+            flashbangs_thrown: None,
+            rounds_count: Some(rounds_count),
+        };
+
+        let mut games: Vec<_> = (0..30)
+            .map(|index| make_game(format!("recent-{index}"), index, 24))
+            .collect();
+        games.push(make_game("old-outlier".to_string(), 31, 99));
+
+        let estimate = average_recent_match_duration(&games).expect("recent matches should exist");
+
+        assert_eq!(estimate.matches_used, RECENT_MATCHES_LIMIT);
+        assert_eq!(estimate.average_rounds, 24.0);
+        assert_eq!(estimate.minutes, 48.0);
+    }
+
+    #[test]
+    fn average_recent_match_duration_ignores_matches_without_round_data() {
+        let game = LeetifyGame {
+            id: Some("missing-rounds".to_string()),
+            own_team_steam64_ids: vec![],
+            game_finished_at: Utc::now(),
+            map_name: "de_nuke".to_string(),
+            match_result: "win".to_string(),
+            scores: (13, 9),
+            skill_level: None,
+            teammates_flashed: None,
+            flashbangs_thrown: None,
+            rounds_count: None,
+        };
+
+        assert!(average_recent_match_duration(&[game]).is_none());
     }
 
     #[test]
@@ -1282,6 +1386,7 @@ mod tests {
             },
             weather: None,
             leetify: None,
+            electricity: ElectricitySettings::default(),
         };
         let steam_id = SteamID::new(PUBLIC_TEST_STEAM_ID.to_string());
 

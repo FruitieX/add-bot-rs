@@ -17,3 +17,10 @@ display_name = "Helsinki, FI"
 # Obtain one at https://leetify.com/app/developer
 #[leetify]
 #api_key = "<Leetify API key>"
+
+# Optional settings for the /el forecast shown when queues are active.
+# Defaults are a 500 W gaming PC and Caruna Espoo Yleissiirto at 2.77 c/kWh
+# including VAT; the fixed monthly transfer fee is not allocated to a match.
+[electricity]
+gaming_pc_power_watts = 500.0
+caruna_espoo_distribution_cents_per_kwh = 2.77

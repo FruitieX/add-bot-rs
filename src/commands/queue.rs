@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use chrono::{NaiveTime, Timelike, Utc};
+use chrono::{NaiveTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use teloxide::{types::ChatId, Bot};
 
@@ -198,6 +198,29 @@ fn recent_win_rate(matches: &[services::leetify::RecentMatch]) -> Option<f32> {
     (decisive_matches > 0).then(|| wins as f32 / decisive_matches as f32 * 100.0)
 }
 
+pub(crate) fn queue_start_at(
+    queue_id: &QueueId,
+    queue: &Queue,
+    now: chrono::DateTime<Tz>,
+) -> chrono::DateTime<Tz> {
+    if queue_id.is_instant_queue() {
+        return now;
+    }
+
+    let scheduled = now.date_naive().and_time(queue.timeout);
+    let scheduled = now
+        .timezone()
+        .from_local_datetime(&scheduled)
+        .earliest()
+        .unwrap_or(now);
+
+    if scheduled < now {
+        scheduled + chrono::Duration::days(1)
+    } else {
+        scheduled
+    }
+}
+
 pub async fn predictions(settings: &Settings, state: State, chat_id: ChatId, tz: &Tz) -> String {
     let Some(chat) = state.chats.get(&chat_id) else {
         return "No active queues.".to_string();
@@ -286,6 +309,35 @@ pub async fn predictions(settings: &Settings, state: State, chat_id: ChatId, tz:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn queue_start_is_now_for_instant_and_next_scheduled_occurrence_for_timed() {
+        let tz = chrono_tz::Europe::Helsinki;
+        let now = tz.with_ymd_and_hms(2026, 9, 12, 18, 0, 0).unwrap();
+        let instant_id = QueueId::new(String::new());
+        let instant_queue = Queue::new(
+            NaiveTime::from_hms_opt(18, 30, 0).unwrap(),
+            "/add".to_string(),
+        );
+        assert_eq!(queue_start_at(&instant_id, &instant_queue, now), now);
+
+        let timed_id = QueueId::new("19:30".to_string());
+        let timed_queue = Queue::new(
+            NaiveTime::from_hms_opt(19, 30, 0).unwrap(),
+            "/1930".to_string(),
+        );
+        assert_eq!(
+            queue_start_at(&timed_id, &timed_queue, now),
+            tz.with_ymd_and_hms(2026, 9, 12, 19, 30, 0).unwrap()
+        );
+
+        let after_schedule = tz.with_ymd_and_hms(2026, 9, 12, 20, 0, 0).unwrap();
+        assert_eq!(
+            queue_start_at(&timed_id, &timed_queue, after_schedule),
+            tz.with_ymd_and_hms(2026, 9, 13, 19, 30, 0).unwrap()
+        );
+    }
 
     #[test]
     fn recent_win_rate_ignores_ties() {
