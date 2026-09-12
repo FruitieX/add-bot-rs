@@ -108,20 +108,7 @@ fn format_queue_cost_message(
         forecast_lines.push(line);
     }
 
-    format!(
-        "Upcoming CS2 queue electricity forecast:\n\
-Estimated match duration: {:.0} minutes, based on {} of the latest {} matches with round data (average {:.1} rounds × {:.1} minutes).\n\
-Assumptions: {:.0} W gaming PC; Caruna Espoo Yleissiirto {:.2} c/kWh including VAT. Porssisahko spot prices are used as returned (including VAT). The fixed monthly transfer fee and any separate electricity tax are excluded.\n\
-{}",
-        duration.minutes,
-        duration.matches_used,
-        crate::services::leetify::RECENT_MATCHES_LIMIT,
-        duration.average_rounds,
-        crate::services::leetify::CS2_ESTIMATED_MINUTES_PER_ROUND,
-        power_watts,
-        distribution_cents_per_kwh,
-        forecast_lines.join("\n")
-    )
+    forecast_lines.join("\n")
 }
 
 fn format_forecast_line(
@@ -193,7 +180,10 @@ mod tests {
             2.0,
         );
 
-        assert!(message.contains("Upcoming CS2 queue electricity forecast"));
+        assert!(message.starts_with("- 19:30"));
+        assert!(!message.contains("Upcoming CS2 queue electricity forecast"));
+        assert!(!message.contains("Estimated match duration"));
+        assert!(!message.contains("Assumptions:"));
         assert!(message.contains("scheduled for 19:30"));
         assert!(message.contains("spot €0.05"));
         assert!(message.contains("Caruna €0.01"));
