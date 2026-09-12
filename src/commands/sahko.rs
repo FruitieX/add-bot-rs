@@ -102,7 +102,7 @@ fn format_queue_cost_message(
         );
 
         let line = match estimate {
-            Ok(estimate) => format_forecast_line(&queue_id, &start_label, &estimate, duration),
+            Ok(estimate) => format_forecast_line(&queue_id, &start_label, &estimate),
             Err(error) => format!("- {queue_id} ({start_label}): unavailable ({error})"),
         };
         forecast_lines.push(line);
@@ -115,13 +115,9 @@ fn format_forecast_line(
     queue_id: &QueueId,
     start_label: &str,
     estimate: &EnergyCostEstimate,
-    duration: &MatchDurationEstimate,
 ) -> String {
     format!(
-        "- {queue_id} ({start_label}): spot {spot}, Caruna {distribution}, total {total} for {:.2} kWh",
-        duration.minutes,
-        spot = format_eur(estimate.spot_cost_eur),
-        distribution = format_eur(estimate.distribution_cost_eur),
+        "- {queue_id} ({start_label}): total {total}",
         total = format_eur(estimate.total_cost_eur),
     )
 }
@@ -145,7 +141,7 @@ mod tests {
     use chrono::{NaiveTime, TimeZone};
 
     #[test]
-    fn queue_cost_message_contains_timing_and_cost_breakdown() {
+    fn queue_cost_message_contains_timing_and_total() {
         let tz = chrono_tz::Europe::Helsinki;
         let now = tz.with_ymd_and_hms(2026, 9, 12, 18, 0, 0).unwrap();
         let start = tz.with_ymd_and_hms(2026, 9, 12, 19, 30, 0).unwrap();
@@ -180,13 +176,6 @@ mod tests {
             2.0,
         );
 
-        assert!(message.starts_with("- 19:30"));
-        assert!(!message.contains("Upcoming CS2 queue electricity forecast"));
-        assert!(!message.contains("Estimated match duration"));
-        assert!(!message.contains("Assumptions:"));
-        assert!(message.contains("scheduled for 19:30"));
-        assert!(message.contains("spot €0.05"));
-        assert!(message.contains("Caruna €0.01"));
-        assert!(message.contains("total €0.06"));
+        assert_eq!(message, "- 19:30 (scheduled for 19:30): total €0.06",);
     }
 }
