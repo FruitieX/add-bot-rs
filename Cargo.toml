@@ -28,7 +28,6 @@ clap = { version = "=4.6.6", features = ["derive"] }
 cached = { version = "=4.0.0", features = [
     "default",
     "async",
-    "async_tokio_rt_multi_thread",
 ] }
 reqwest = { version = "=0.12.28", default-features = false, features = [
     "json",

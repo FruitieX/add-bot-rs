@@ -91,7 +91,7 @@ pub fn estimate_energy_cost(
         total_cost_eur: spot_cost_eur + distribution_cost_eur,
     })
 }
-#[cached(result = true, time = 1)]
+#[cached(ttl_secs = 1)]
 pub async fn get_price_chart() -> Result<Vec<u8>> {
     // Get prices
     let prices = get_latest_prices().await?;
@@ -367,7 +367,7 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-#[cached(result = true, time = 60)]
+#[cached(ttl_secs = 60)]
 pub(crate) async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
     println!("Fetching latest sahko prices");
     let url = "https://api.porssisahko.net/v2/latest-prices.json";
