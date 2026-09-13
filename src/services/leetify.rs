@@ -209,12 +209,7 @@ fn public_match_to_game(game: PublicMatch, steam_id: &SteamID) -> Option<Leetify
     })
 }
 
-#[cached(
-    time = 300,
-    result = true,
-    key = "SteamID",
-    convert = r#"{ steam_id.clone() }"#
-)]
+#[cached(ttl_secs = 300, key = "SteamID", convert = r#"{ steam_id.clone() }"#)]
 async fn get_leetify_games_cached(
     client: LeetifyClient,
     steam_id: SteamID,

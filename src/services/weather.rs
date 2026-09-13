@@ -349,7 +349,7 @@ fn fmt_symbol(symbol: &Option<String>) -> String {
 ///
 /// The met.no API guidelines suggest reasonable caching, and 1 hour granularity
 /// is a practical compromise for a chat bot while staying within rate limits.
-#[cached(time = 3600, result = true)]
+#[cached(ttl_secs = 3600)]
 pub async fn get_forecast() -> Result<Forecast> {
     let mut url =
         reqwest::Url::parse(METNO_URL).map_err(|e| eyre!("Invalid met.no endpoint URL: {e}"))?;
