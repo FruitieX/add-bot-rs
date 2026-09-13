@@ -348,7 +348,7 @@ pub async fn get_activity_chart(
                     teammate_totals.push((other_username.clone(), inter));
                 }
             }
-            teammate_totals.sort_by(|a, b| b.1.cmp(&a.1));
+            teammate_totals.sort_by_key(|a| std::cmp::Reverse(a.1));
 
             // Build vector including filtered user first
             let mut v: Vec<(String, u32)> = Vec::new();
@@ -367,7 +367,7 @@ pub async fn get_activity_chart(
                 })
                 .collect();
 
-            player_totals.sort_by(|a, b| b.1.cmp(&a.1));
+            player_totals.sort_by_key(|a| std::cmp::Reverse(a.1));
 
             player_totals.into_iter().take(10).collect()
         };
@@ -530,7 +530,7 @@ pub async fn get_activity_chart(
                     .collect::<Vec<_>>();
                 let color = palette[idx % palette.len()];
                 let rgb = RGBColor(color.r, color.g, color.b);
-                ctx.draw_series(LineSeries::new(series_pts.into_iter(), rgb))?
+                ctx.draw_series(LineSeries::new(series_pts, rgb))?
                     .label(username.clone())
                     .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], rgb));
             }
