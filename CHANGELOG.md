@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/FruitieX/add-bot-rs/compare/v0.1.0...v0.1.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate cached to v4 ([#804](https://github.com/FruitieX/add-bot-rs/issues/804)) ([a119e5b](https://github.com/FruitieX/add-bot-rs/commit/a119e5bd7e8802f1ca4d1115a7acc421a10105fd))
+* **deps:** update rust crate reqwest to v0.13.5 ([#663](https://github.com/FruitieX/add-bot-rs/issues/663)) ([3b3d6db](https://github.com/FruitieX/add-bot-rs/commit/3b3d6db264ef9b3b360861b770c96db33da49eb7))
+
 ## 0.1.0 (2026-09-12)
 
 
