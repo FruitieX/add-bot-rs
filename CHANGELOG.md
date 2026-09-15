@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/FruitieX/add-bot-rs/compare/v0.1.1...v0.1.2) (2026-09-15)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate clap to v4.6.7 ([#807](https://github.com/FruitieX/add-bot-rs/issues/807)) ([f821468](https://github.com/FruitieX/add-bot-rs/commit/f82146806d029b9acc917a832e29b32f8f276033))
+
 ## [0.1.1](https://github.com/FruitieX/add-bot-rs/compare/v0.1.0...v0.1.1) (2026-09-14)
 
 
