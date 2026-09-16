@@ -19,6 +19,7 @@ in
     name = "env";
     buildInputs = [
       rustStableChannel
+      stdenv.cc
       pkg-config
       openssl
     ];

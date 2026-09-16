@@ -62,6 +62,7 @@ jobs:
           set -eux
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
           rustup toolchain install 1.94.1 --profile minimal \
             --component rustfmt \
             --component clippy \
