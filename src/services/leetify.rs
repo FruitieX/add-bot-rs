@@ -166,8 +166,7 @@ fn public_match_to_game(game: PublicMatch, steam_id: &SteamID) -> Option<Leetify
     let player = game
         .stats
         .iter()
-        .find(|player| player.steam64_id == steam_id.to_string())
-        .or_else(|| game.stats.first())?;
+        .find(|player| player.steam64_id == steam_id.to_string())?;
 
     let own_team_steam64_ids = game
         .stats
@@ -1136,6 +1135,36 @@ mod tests {
         assert_eq!(game.teammates_flashed, Some(4));
         assert_eq!(game.flashbangs_thrown, Some(8));
         assert_eq!(game.rounds_count, Some(22));
+    }
+
+    #[test]
+    fn public_match_rejects_a_missing_requested_player() {
+        let game = PublicMatch {
+            id: "match-without-requested-player".to_string(),
+            finished_at: Utc::now(),
+            map_name: "de_mirage".to_string(),
+            team_scores: vec![
+                PublicTeamScore {
+                    team_number: 2,
+                    score: 13,
+                },
+                PublicTeamScore {
+                    team_number: 3,
+                    score: 9,
+                },
+            ],
+            stats: vec![PublicPlayerMatchStats {
+                steam64_id: "another-player".to_string(),
+                initial_team_number: 2,
+                flashbang_hit_friend: 0,
+                flashbang_thrown: 0,
+                rounds_count: 22,
+            }],
+        };
+
+        assert!(
+            public_match_to_game(game, &SteamID::new("requested-player".to_string())).is_none()
+        );
     }
 
     #[test]
