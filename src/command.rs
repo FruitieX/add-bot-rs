@@ -14,7 +14,8 @@ The following commands are supported:
 - /1930         Add/remove player from timed queue at 19:30.
 - /add          Add/remove player from the instant queue.
 - /ls           List existing queues.
-- /predict      Predicted win rates for current queues.
+- /predict [1-100]
+                Predicted win rates for current queues, using the latest 30 matches by default.
 - /rm           Remove yourself from all queues.
 - /lastplayed   Last played game stats for player.
 - /stats        Leetify stats for player.
@@ -51,7 +52,9 @@ pub enum Command {
     List,
 
     /// Predicted win rates for queues in the current chat.
-    Predictions,
+    Predictions {
+        match_count: usize,
+    },
 
     /// Leetify stats for user
     Stats {
@@ -176,6 +179,23 @@ fn parse_username_arg(s: String) -> Option<Username> {
     Some(Username::new(username.to_string()))
 }
 
+fn parse_prediction_match_count(
+    args: Option<String>,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    const MAX_MATCH_COUNT: usize = 100;
+
+    let match_count = args.as_deref().unwrap_or("30").parse::<usize>()?;
+    if !(1..=MAX_MATCH_COUNT).contains(&match_count) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("prediction match count must be between 1 and {MAX_MATCH_COUNT}"),
+        )
+        .into());
+    }
+
+    Ok(match_count)
+}
+
 pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Error + Send + Sync>> {
     let text = text.trim();
 
@@ -188,7 +208,10 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "help" | "info" | "version" | "v" | "start" => Some(Command::Help),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
-            "predict" | "prediction" | "predictions" | "winpct" => Some(Command::Predictions),
+            "predict" | "prediction" | "predictions" | "winpct" => {
+                let match_count = parse_prediction_match_count(args)?;
+                Some(Command::Predictions { match_count })
+            }
             "statistics" | "stats" => {
                 let for_user = args.and_then(parse_username_arg);
 
@@ -306,4 +329,36 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
     };
 
     Ok(cmd_result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prediction_match_count_defaults_to_thirty() {
+        assert!(matches!(
+            parse_cmd("/predict").unwrap(),
+            Some(Command::Predictions { match_count: 30 })
+        ));
+    }
+
+    #[test]
+    fn prediction_match_count_accepts_one_to_one_hundred() {
+        assert!(matches!(
+            parse_cmd("/predict 1").unwrap(),
+            Some(Command::Predictions { match_count: 1 })
+        ));
+        assert!(matches!(
+            parse_cmd("/predict 100").unwrap(),
+            Some(Command::Predictions { match_count: 100 })
+        ));
+    }
+
+    #[test]
+    fn prediction_match_count_rejects_values_outside_range() {
+        assert!(parse_cmd("/predict 0").is_err());
+        assert!(parse_cmd("/predict 101").is_err());
+        assert!(parse_cmd("/predict many").is_err());
+    }
 }

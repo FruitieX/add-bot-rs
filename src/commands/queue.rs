@@ -217,8 +217,13 @@ struct ObservationCandidate {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PredictionStats {
+    // Composition-weighted totals used by the lineup-aware estimate.
     wins: usize,
     losses: usize,
+    // Unweighted totals for the deduplicated historical team observations.
+    observed_wins: usize,
+    observed_losses: usize,
+    observed_ties: usize,
     unique_observations: usize,
     unique_matches: usize,
 }
@@ -232,12 +237,20 @@ fn prediction_result(game: &services::leetify::LeetifyGame) -> Option<Prediction
     }
 }
 
+#[cfg(test)]
 fn select_recent_games(
     games: &[services::leetify::LeetifyGame],
 ) -> Vec<services::leetify::LeetifyGame> {
+    select_recent_games_with_limit(games, services::leetify::RECENT_MATCHES_LIMIT)
+}
+
+fn select_recent_games_with_limit(
+    games: &[services::leetify::LeetifyGame],
+    match_count: usize,
+) -> Vec<services::leetify::LeetifyGame> {
     let mut selected = games.to_vec();
     selected.sort_by_key(|game| std::cmp::Reverse(game.game_finished_at));
-    selected.truncate(services::leetify::RECENT_MATCHES_LIMIT);
+    selected.truncate(match_count);
     selected
 }
 
@@ -248,23 +261,36 @@ fn queued_side_sort_key(side: &[SteamID]) -> String {
         .join(",")
 }
 
+#[cfg(test)]
+fn build_team_observations(
+    queue_steam_ids: &[SteamID],
+    histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
+) -> Vec<TeamObservation> {
+    build_team_observations_with_limit(
+        queue_steam_ids,
+        histories,
+        services::leetify::RECENT_MATCHES_LIMIT,
+    )
+}
+
 /// Build one observation per `(match_id, queued_side)` from each player's
 /// newest match window. The window controls candidate inclusion; the complete
 /// historical side controls the overlap. The observation weight also includes
 /// the outside-lineup slots that will exist in a not-yet-full queue:
 /// `overlap + (5 - queued-player-count)`. In particular, a queued teammate
 /// can contribute to overlap even when that teammate's own history did not
-/// select the match in its newest thirty games.
-fn build_team_observations(
+/// select the match in its own newest requested match window.
+fn build_team_observations_with_limit(
     queue_steam_ids: &[SteamID],
     histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
+    match_count: usize,
 ) -> Vec<TeamObservation> {
     let queue_steam_ids: HashSet<SteamID> = queue_steam_ids.iter().cloned().collect();
     let outside_lineup_slots = 5usize.saturating_sub(queue_steam_ids.len());
     let mut candidates: HashMap<TeamObservationKey, Vec<ObservationCandidate>> = HashMap::new();
 
     for (queried_steam_id, games) in histories {
-        for game in select_recent_games(games) {
+        for game in select_recent_games_with_limit(games, match_count) {
             // A history entry must describe the requested player's perspective.
             // public_match_to_game() enforces this for API data, but keeping the
             // invariant here also protects the aggregation from malformed input.
@@ -349,9 +375,18 @@ fn aggregate_prediction(observations: &[TeamObservation]) -> Option<PredictionSt
 
     for observation in observations {
         match observation.result {
-            PredictionResult::Win => stats.wins += observation.weight,
-            PredictionResult::Loss => stats.losses += observation.weight,
-            PredictionResult::Tie => continue,
+            PredictionResult::Win => {
+                stats.observed_wins += 1;
+                stats.wins += observation.weight;
+            }
+            PredictionResult::Loss => {
+                stats.observed_losses += 1;
+                stats.losses += observation.weight;
+            }
+            PredictionResult::Tie => {
+                stats.observed_ties += 1;
+                continue;
+            }
         }
 
         stats.unique_observations += 1;
@@ -364,6 +399,47 @@ fn aggregate_prediction(observations: &[TeamObservation]) -> Option<PredictionSt
 
     stats.unique_matches = unique_matches.len();
     Some(stats)
+}
+
+fn win_percentage(wins: usize, losses: usize) -> f32 {
+    if wins + losses == 0 {
+        0.0
+    } else {
+        wins as f32 / (wins + losses) as f32 * 100.0
+    }
+}
+
+fn format_prediction_line(
+    queue_id: &QueueId,
+    queue_size: usize,
+    player_count: usize,
+    available_histories: usize,
+    stats: Option<PredictionStats>,
+) -> String {
+    let coverage = if available_histories < player_count {
+        format!(" · {available_histories}/{player_count} histories available")
+    } else {
+        String::new()
+    };
+
+    match stats {
+        None => format!(
+            "- <b>{queue_id}</b> · <b>{player_count}/{queue_size} players</b>{coverage}\n  Prediction unavailable"
+        ),
+        Some(stats) => {
+            let observed_win_percentage = win_percentage(stats.observed_wins, stats.observed_losses);
+            let lineup_aware_win_percentage = win_percentage(stats.wins, stats.losses);
+
+            format!(
+                "- <b>{queue_id}</b> · <b>{player_count}/{queue_size} players</b>{coverage}\n  <b>Observed history:</b> {}W / {}L / {}T ({observed_win_percentage:.0}%)\n  <b>Lineup-aware estimate:</b> {}W / {}L ({lineup_aware_win_percentage:.0}%)",
+                stats.observed_wins,
+                stats.observed_losses,
+                stats.observed_ties,
+                stats.wins,
+                stats.losses,
+            )
+        }
+    }
 }
 
 async fn fetch_prediction_histories(
@@ -411,7 +487,13 @@ pub(crate) fn queue_start_at(
     }
 }
 
-pub async fn predictions(settings: &Settings, state: State, chat_id: ChatId, tz: &Tz) -> String {
+pub async fn predictions(
+    settings: &Settings,
+    state: State,
+    chat_id: ChatId,
+    tz: &Tz,
+    match_count: usize,
+) -> String {
     let Some(chat) = state.chats.get(&chat_id) else {
         return "No active queues.".to_string();
     };
@@ -472,7 +554,8 @@ pub async fn predictions(settings: &Settings, state: State, chat_id: ChatId, tz:
                 .iter()
                 .filter_map(|username| player_steam_ids.get(username).cloned())
                 .collect::<Vec<_>>();
-            let observations = build_team_observations(&queue_steam_ids, &histories);
+            let observations =
+                build_team_observations_with_limit(&queue_steam_ids, &histories, match_count);
             let available_histories = players
                 .iter()
                 .filter(|username| {
@@ -482,36 +565,20 @@ pub async fn predictions(settings: &Settings, state: State, chat_id: ChatId, tz:
                 })
                 .count();
 
-            match aggregate_prediction(&observations) {
-                None => format!(
-                    "- {queue_id}: unavailable ({available_histories}/{} player histories)",
-                    players.len()
-                ),
-                Some(stats) => {
-                    let predicted_win_rate =
-                        stats.wins as f32 / (stats.wins + stats.losses) as f32 * 100.0;
-                    let coverage = if available_histories < players.len() {
-                        format!("; {available_histories}/{} histories", players.len())
-                    } else {
-                        String::new()
-                    };
-                    format!(
-                        "- {queue_id}: {}W/{}L ({predicted_win_rate:.0}%) ({}/{} players{})",
-                        stats.wins,
-                        stats.losses,
-                        players.len(),
-                        queue.size(),
-                        coverage
-                    )
-                }
-            }
+            format_prediction_line(
+                queue_id,
+                queue.size(),
+                players.len(),
+                available_histories,
+                aggregate_prediction(&observations),
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
+    let match_label = if match_count == 1 { "match" } else { "matches" };
     format!(
-        "Predicted win rates for current queues:\n(based on latest {} matches per player)\n\n{queue_lines}",
-        services::leetify::RECENT_MATCHES_LIMIT
+        "<b>Predicted win rates for current queues</b>\n<i>Based on each player's latest {match_count} {match_label}</i>\n\n{queue_lines}"
     )
 }
 
@@ -568,9 +635,36 @@ mod tests {
         aggregate_prediction(&observations)
     }
 
+    fn prediction_stats_with_limit(
+        queue_steam_ids: &[SteamID],
+        histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
+        match_count: usize,
+    ) -> Option<PredictionStats> {
+        let observations =
+            build_team_observations_with_limit(queue_steam_ids, histories, match_count);
+        aggregate_prediction(&observations)
+    }
+
     fn assert_win_loss(stats: Option<PredictionStats>, wins: usize, losses: usize) {
         let stats = stats.expect("prediction should have decisive observations");
         assert_eq!((stats.wins, stats.losses), (wins, losses));
+    }
+
+    fn assert_observed_results(
+        stats: Option<PredictionStats>,
+        wins: usize,
+        losses: usize,
+        ties: usize,
+    ) {
+        let stats = stats.expect("prediction should have decisive observations");
+        assert_eq!(
+            (
+                stats.observed_wins,
+                stats.observed_losses,
+                stats.observed_ties
+            ),
+            (wins, losses, ties)
+        );
     }
 
     #[test]
@@ -758,7 +852,9 @@ mod tests {
             ("C", vec![game("opponents", &["C", "enemy"], "loss", 1)]),
         ]);
 
-        assert_win_loss(prediction_stats(&queue, &histories), 4, 3);
+        let stats = prediction_stats(&queue, &histories);
+        assert_win_loss(stats, 4, 3);
+        assert_observed_results(prediction_stats(&queue, &histories), 1, 1, 0);
     }
 
     #[test]
@@ -769,7 +865,9 @@ mod tests {
             ("B", vec![game("opponents", &["B", "outside"], "loss", 1)]),
         ]);
 
-        assert_win_loss(prediction_stats(&queue, &histories), 4, 4);
+        let stats = prediction_stats(&queue, &histories);
+        assert_win_loss(stats, 4, 4);
+        assert_observed_results(prediction_stats(&queue, &histories), 1, 1, 0);
     }
 
     #[test]
@@ -851,6 +949,46 @@ mod tests {
         assert_eq!(shared.overlap, 2);
         assert_eq!(shared.weight, 5);
         assert_win_loss(aggregate_prediction(&observations), 5, 0);
+    }
+
+    #[test]
+    fn prediction_uses_the_requested_latest_match_count_per_player() {
+        let queue = vec![steam_id("A")];
+        let histories = histories(vec![(
+            "A",
+            vec![
+                game("new", &["A"], "loss", 1),
+                game("old", &["A"], "win", 2),
+            ],
+        )]);
+
+        let stats = prediction_stats_with_limit(&queue, &histories, 1).unwrap();
+        assert_eq!((stats.observed_wins, stats.observed_losses), (0, 1));
+        assert_eq!((stats.wins, stats.losses), (0, 5));
+    }
+
+    #[test]
+    fn prediction_line_shows_observed_and_lineup_aware_results() {
+        let line = format_prediction_line(
+            &QueueId::new("20:15".to_string()),
+            5,
+            1,
+            1,
+            Some(PredictionStats {
+                wins: 70,
+                losses: 75,
+                observed_wins: 14,
+                observed_losses: 15,
+                observed_ties: 1,
+                unique_observations: 29,
+                unique_matches: 29,
+            }),
+        );
+
+        assert_eq!(
+            line,
+            "- <b>20:15</b> · <b>1/5 players</b>\n  <b>Observed history:</b> 14W / 15L / 1T (48%)\n  <b>Lineup-aware estimate:</b> 70W / 75L (48%)"
+        );
     }
 
     #[test]

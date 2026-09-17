@@ -166,7 +166,15 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
 }
 
 fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> String {
-    const DISPLAYED_RESULTS: usize = 10;
+    const RESULTS_PER_ROW: usize = 10;
+
+    // The profile endpoint returns its recent_matches collection newest first.
+    // Keep the same order for the form display and calculate all counts from
+    // only the configured recent-match window.
+    let recent_matches = recent_matches
+        .iter()
+        .take(services::leetify::RECENT_MATCHES_LIMIT)
+        .collect::<Vec<_>>();
 
     let wins = recent_matches
         .iter()
@@ -180,20 +188,28 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
         .iter()
         .filter(|m| matches!(&m.result, services::leetify::MatchResult::Tie))
         .count();
-    let decisive_matches = wins + losses;
-    let win_percentage = if decisive_matches == 0 {
+    let win_percentage = if wins + losses == 0 {
         0.0
     } else {
-        wins as f32 / decisive_matches as f32 * 100.0
+        wins as f32 / (wins + losses) as f32 * 100.0
     };
     let results = recent_matches
         .iter()
-        .take(DISPLAYED_RESULTS)
         .map(|m| m.result.to_string())
         .collect::<Vec<_>>()
-        .join(" ");
+        .chunks(RESULTS_PER_ROW)
+        .map(|row| row.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let results = if results.is_empty() {
+        "No results available".to_string()
+    } else {
+        results
+    };
 
-    format!("{results} ({wins}W/{losses}L/{ties}T, {win_percentage:.0}% win rate)")
+    format!(
+        "{results}\n<b>{wins}W / {losses}L / {ties}T</b> · <b>{win_percentage:.0}% win rate</b>"
+    )
 }
 
 fn format_teammate_result(entry: &services::leetify::TeammateStatsEntry) -> String {
@@ -222,10 +238,7 @@ fn format_teammate_stats(stats: &services::leetify::TeammateStats) -> String {
     let best_win_rates = format_teammate_results(&stats.best_win_rates_with);
     let worst_win_rates = format_teammate_results(&stats.worst_win_rates_with);
 
-    format!(
-        "Teammates from last {} matches:\n- Best: {best_win_rates}\n- Worst: {worst_win_rates}",
-        services::leetify::RECENT_MATCHES_LIMIT
-    )
+    format!("<b>Best:</b> {best_win_rates}\n<b>Worst:</b> {worst_win_rates}")
 }
 
 pub async fn stats(settings: &Settings, username: &Username) -> String {
@@ -260,14 +273,28 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
                 Ok(teammate_stats) => format_teammate_stats(&teammate_stats),
                 Err(e) => {
                     eprintln!("Failed to fetch teammate stats from Leetify: {}", e);
-                    format!(
-                        "Teammates from last {} matches: unavailable",
-                        services::leetify::RECENT_MATCHES_LIMIT
-                    )
+                    "unavailable".to_string()
                 }
             };
 
-            let text = format!("Stats for {username} from last 30 matches:\n- CT Leetify rating: {ct_leetify}\n- T Leetify rating: {t_leetify}\n- Aim: {aim:.2}\n- Positioning: {positioning:.2}\n- Utility: {utility:.2}\n- Opening duels: {opening:.2}\n- Clutch: {clutch:.2}\n- Premier rating: {skill_level}\n- Recent results: {recent_results}\n\n{teammate_stats}");
+            let text = format!(
+                "<b>Stats for {username}</b>\n<i>Last {} matches</i>\n\n\
+                 <b>Recent form</b> <i>(latest → oldest)</i>\n\
+                 {recent_results}\n\n\
+                 <b>Ratings</b>\n\
+                 CT Leetify: {ct_leetify}\n\
+                 T Leetify: {t_leetify}\n\
+                 Aim: {aim:.2}\n\
+                 Positioning: {positioning:.2}\n\
+                 Utility: {utility:.2}\n\
+                 Opening duels: {opening:.2}\n\
+                 Clutch: {clutch:.2}\n\
+                 Premier rating: {skill_level}\n\n\
+                 <b>Teammates</b> <i>(last {} matches)</i>\n\
+                 {teammate_stats}",
+                services::leetify::RECENT_MATCHES_LIMIT,
+                services::leetify::RECENT_MATCHES_LIMIT,
+            );
             text
         }
         Err(e) => {
@@ -297,7 +324,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "W L W T (2W/1L/1T, 67% win rate)"
+            "W L W T\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
         );
     }
 
@@ -305,11 +332,14 @@ mod tests {
     fn ties_do_not_make_an_all_tie_result_a_win() {
         let results = vec![result(MatchResult::Tie)];
 
-        assert_eq!(format_recent_results(&results), "T (0W/0L/1T, 0% win rate)");
+        assert_eq!(
+            format_recent_results(&results),
+            "T\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
+        );
     }
 
     #[test]
-    fn only_ten_results_are_rendered_but_all_100_results_are_counted() {
+    fn only_latest_thirty_results_are_rendered_and_counted() {
         let mut results = vec![
             result(MatchResult::Win),
             result(MatchResult::Loss),
@@ -328,7 +358,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "W L T W L W L W L W (40W/55L/5T, 42% win rate)"
+            "W L T W L W L W L W\nW W W W W W W W W W\nW W W W W W W W W W\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
         );
     }
 }
