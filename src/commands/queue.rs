@@ -622,12 +622,10 @@ fn format_prediction_line(
             let lineup_aware_win_percentage = win_percentage(stats.wins, stats.losses);
 
             format!(
-                "- <b>{queue_id}</b> · <b>{player_count}/{queue_size} players</b>{coverage}\n  <b>Observed history:</b> {}W / {}L / {}T ({observed_win_percentage:.0}%)\n  <b>Lineup-aware estimate:</b> {}W / {}L ({lineup_aware_win_percentage:.0}%)",
+                "- <b>{queue_id}</b> · <b>{player_count}/{queue_size} players</b>{coverage}\n  <b>Recent results:</b> {}W / {}L / {}T ({observed_win_percentage:.0}%)\n  <b>Predicted win rate:</b> {lineup_aware_win_percentage:.0}%",
                 stats.observed_wins,
                 stats.observed_losses,
                 stats.observed_ties,
-                stats.wins,
-                stats.losses,
             )
         }
     }
@@ -1470,7 +1468,7 @@ mod tests {
     }
 
     #[test]
-    fn prediction_line_shows_observed_and_lineup_aware_results() {
+    fn prediction_line_shows_recent_results_and_predicted_rate() {
         let line = format_prediction_line(
             &QueueId::new("20:15".to_string()),
             5,
@@ -1489,7 +1487,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "- <b>20:15</b> · <b>1/5 players</b>\n  <b>Observed history:</b> 14W / 15L / 1T (48%)\n  <b>Lineup-aware estimate:</b> 70W / 75L (48%)"
+            "- <b>20:15</b> · <b>1/5 players</b>\n  <b>Recent results:</b> 14W / 15L / 1T (48%)\n  <b>Predicted win rate:</b> 48%"
         );
     }
 
