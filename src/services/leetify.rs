@@ -17,7 +17,6 @@ use crate::{
 };
 
 const LEETIFY_API_BASE_URL: &str = "https://api-public.cs-prod.leetify.com";
-const MATCH_HYDRATION_CONCURRENCY: usize = 2;
 const MATCH_HYDRATION_MAX_ATTEMPTS: usize = 3;
 const MATCH_HYDRATION_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 static MATCH_CACHE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -42,10 +41,6 @@ impl MatchHydrationError {
             Self::RateLimited { retry_after, .. } => *retry_after,
             Self::Transient(_) | Self::Fatal(_) => None,
         }
-    }
-
-    fn is_rate_limited(&self) -> bool {
-        matches!(self, Self::RateLimited { .. })
     }
 }
 
@@ -526,93 +521,61 @@ pub(crate) async fn get_leetify_matches(
     let mut match_ids = match_ids.into_iter().collect::<Vec<_>>();
     match_ids.sort();
     let mut hydration = LeetifyMatchHydration::default();
-    let mut pending_match_ids = match_ids;
 
-    for attempt in 0..MATCH_HYDRATION_MAX_ATTEMPTS {
-        let mut retry_match_ids = Vec::new();
-        let mut retry_after = None;
-        let mut offset = 0;
+    // Match-detail responses are immutable and cached individually. Hydrate
+    // uncached IDs sequentially so a Leetify rate limit only delays the one
+    // request that hit it. A batch-wide retry budget would otherwise defer all
+    // remaining IDs and can exhaust its attempts while making little progress.
+    for match_id in match_ids {
+        for attempt in 0..MATCH_HYDRATION_MAX_ATTEMPTS {
+            let result = get_leetify_match_cached(
+                client.clone(),
+                match_id.clone(),
+                match_cache_path.clone(),
+            )
+            .await;
 
-        while offset < pending_match_ids.len() {
-            let chunk_end = (offset + MATCH_HYDRATION_CONCURRENCY).min(pending_match_ids.len());
-            let requests = pending_match_ids[offset..chunk_end]
-                .iter()
-                .cloned()
-                .map(|match_id| {
-                    let client = client.clone();
-                    let match_cache_path = match_cache_path.clone();
-                    async move {
-                        let result =
-                            get_leetify_match_cached(client, match_id.clone(), match_cache_path)
-                                .await;
-                        (match_id, result)
-                    }
-                });
-            let results = futures::stream::iter(requests)
-                .buffer_unordered(MATCH_HYDRATION_CONCURRENCY)
-                .collect::<Vec<_>>()
-                .await;
-            let mut rate_limited = false;
+            match result {
+                Ok(Some(game)) => {
+                    hydration.matches.insert(match_id.clone(), game);
+                    break;
+                }
+                Ok(None) => {
+                    eprintln!("Skipping unavailable or incomplete Leetify match {match_id}");
+                    break;
+                }
+                Err(error) if error.is_retryable() => {
+                    eprintln!(
+                        "Leetify match {match_id} hydration attempt {} failed and may be retried: {error}",
+                        attempt + 1
+                    );
 
-            for (match_id, result) in results {
-                match result {
-                    Ok(Some(game)) => {
-                        hydration.matches.insert(match_id, game);
+                    if attempt + 1 == MATCH_HYDRATION_MAX_ATTEMPTS {
+                        hydration.failed_match_ids.insert(match_id.clone());
+                        break;
                     }
-                    Ok(None) => {
-                        eprintln!("Skipping unavailable or incomplete Leetify match {match_id}");
-                    }
-                    Err(error) if error.is_retryable() => {
-                        rate_limited |= error.is_rate_limited();
-                        retry_after = retry_after.max(error.retry_after());
+
+                    let Some(delay) = hydration_retry_delay(attempt, error.retry_after()) else {
                         eprintln!(
-                            "Leetify match {match_id} hydration attempt {} failed and may be retried: {error}",
-                            attempt + 1
+                            "Leetify requested a retry delay longer than {} seconds; deferring match {match_id}",
+                            MATCH_HYDRATION_MAX_RETRY_DELAY.as_secs()
                         );
-                        retry_match_ids.push(match_id);
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
-                        hydration.failed_match_ids.insert(match_id);
-                    }
+                        hydration.failed_match_ids.insert(match_id.clone());
+                        break;
+                    };
+                    eprintln!(
+                        "Retrying Leetify match {match_id} in {} seconds",
+                        delay.as_secs()
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => {
+                    eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
+                    hydration.failed_match_ids.insert(match_id.clone());
+                    break;
                 }
             }
-
-            offset = chunk_end;
-            if rate_limited {
-                // Stop issuing new requests during this rate-limit window. Matches
-                // not attempted in this round join the coordinated retry batch.
-                retry_match_ids.extend_from_slice(&pending_match_ids[offset..]);
-                break;
-            }
         }
-
-        retry_match_ids.sort();
-        retry_match_ids.dedup();
-        if retry_match_ids.is_empty() {
-            break;
-        }
-        if attempt + 1 == MATCH_HYDRATION_MAX_ATTEMPTS {
-            hydration.failed_match_ids.extend(retry_match_ids);
-            break;
-        }
-
-        let Some(delay) = hydration_retry_delay(attempt, retry_after) else {
-            eprintln!(
-                "Leetify requested a retry delay longer than {} seconds; deferring {} matches",
-                MATCH_HYDRATION_MAX_RETRY_DELAY.as_secs(),
-                retry_match_ids.len()
-            );
-            hydration.failed_match_ids.extend(retry_match_ids);
-            break;
-        };
-        eprintln!(
-            "Retrying {} Leetify match requests in {} seconds",
-            retry_match_ids.len(),
-            delay.as_secs()
-        );
-        tokio::time::sleep(delay).await;
-        pending_match_ids = retry_match_ids;
     }
     hydration
 }
