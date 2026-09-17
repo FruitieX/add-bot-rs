@@ -8,6 +8,7 @@ use std::{
     fmt::Display,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+    time::Duration,
 };
 
 use crate::{
@@ -17,7 +18,48 @@ use crate::{
 
 const LEETIFY_API_BASE_URL: &str = "https://api-public.cs-prod.leetify.com";
 const MATCH_HYDRATION_CONCURRENCY: usize = 2;
+const MATCH_HYDRATION_MAX_ATTEMPTS: usize = 3;
+const MATCH_HYDRATION_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 static MATCH_CACHE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug)]
+enum MatchHydrationError {
+    RateLimited {
+        message: String,
+        retry_after: Option<Duration>,
+    },
+    Transient(String),
+    Fatal(String),
+}
+
+impl MatchHydrationError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::RateLimited { .. } | Self::Transient(_))
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::RateLimited { retry_after, .. } => *retry_after,
+            Self::Transient(_) | Self::Fatal(_) => None,
+        }
+    }
+
+    fn is_rate_limited(&self) -> bool {
+        matches!(self, Self::RateLimited { .. })
+    }
+}
+
+impl Display for MatchHydrationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited { message, .. } | Self::Transient(message) | Self::Fatal(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for MatchHydrationError {}
 
 fn unwrap_or_log<T, E: Display>(result: std::result::Result<T, E>, err_context: &str) -> Option<T> {
     match result {
@@ -401,7 +443,7 @@ async fn get_leetify_match_cached(
     client: LeetifyClient,
     match_id: String,
     match_cache_path: Option<PathBuf>,
-) -> Result<Option<LeetifyMatch>> {
+) -> std::result::Result<Option<LeetifyMatch>, MatchHydrationError> {
     if let Some(cache_path) = &match_cache_path {
         match read_match_from_disk(cache_path, &match_id).await {
             Ok(Some(game)) => return Ok(Some(game)),
@@ -414,15 +456,45 @@ async fn get_leetify_match_cached(
     }
 
     let path = format!("/v2/matches/{match_id}");
-    let response = client.get_path_response(&path).await?;
+    let response = client
+        .get_path_response(&path)
+        .await
+        .map_err(|error| MatchHydrationError::Transient(error.to_string()))?;
     let status = response.status();
+    let url = response.url().clone();
     if matches!(
         status,
         reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
     ) {
         return Ok(None);
     }
-    let game = public_match_to_match(response.error_for_status()?.json::<PublicMatch>().await?);
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_secs);
+        return Err(MatchHydrationError::RateLimited {
+            message: format!("HTTP status {status} for url ({url})"),
+            retry_after,
+        });
+    }
+    if status.is_server_error() {
+        return Err(MatchHydrationError::Transient(format!(
+            "HTTP status {status} for url ({url})"
+        )));
+    }
+    if !status.is_success() {
+        return Err(MatchHydrationError::Fatal(format!(
+            "HTTP status {status} for url ({url})"
+        )));
+    }
+    let public_match = response
+        .json::<PublicMatch>()
+        .await
+        .map_err(|error| MatchHydrationError::Transient(error.to_string()))?;
+    let game = public_match_to_match(public_match);
 
     if let (Some(cache_path), Some(game)) = (&match_cache_path, &game) {
         if let Err(error) = write_match_to_disk(cache_path, game).await {
@@ -436,6 +508,12 @@ async fn get_leetify_match_cached(
     Ok(game)
 }
 
+fn hydration_retry_delay(attempt: usize, retry_after: Option<Duration>) -> Option<Duration> {
+    let fallback = Duration::from_secs(2_u64.pow(attempt as u32 + 1));
+    let delay = retry_after.unwrap_or(fallback);
+    (delay <= MATCH_HYDRATION_MAX_RETRY_DELAY).then_some(delay)
+}
+
 pub(crate) async fn get_leetify_matches(
     settings: &Settings,
     match_ids: HashSet<String>,
@@ -447,33 +525,94 @@ pub(crate) async fn get_leetify_matches(
         .and_then(|config| config.match_cache_path.clone());
     let mut match_ids = match_ids.into_iter().collect::<Vec<_>>();
     match_ids.sort();
-    let requests = match_ids.into_iter().map(|match_id| {
-        let client = client.clone();
-        let match_cache_path = match_cache_path.clone();
-        async move {
-            let result = get_leetify_match_cached(client, match_id.clone(), match_cache_path).await;
-            (match_id, result)
-        }
-    });
-
-    let results = futures::stream::iter(requests)
-        .buffer_unordered(MATCH_HYDRATION_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
     let mut hydration = LeetifyMatchHydration::default();
-    for (match_id, result) in results {
-        match result {
-            Ok(Some(game)) => {
-                hydration.matches.insert(match_id, game);
+    let mut pending_match_ids = match_ids;
+
+    for attempt in 0..MATCH_HYDRATION_MAX_ATTEMPTS {
+        let mut retry_match_ids = Vec::new();
+        let mut retry_after = None;
+        let mut offset = 0;
+
+        while offset < pending_match_ids.len() {
+            let chunk_end = (offset + MATCH_HYDRATION_CONCURRENCY).min(pending_match_ids.len());
+            let requests = pending_match_ids[offset..chunk_end]
+                .iter()
+                .cloned()
+                .map(|match_id| {
+                    let client = client.clone();
+                    let match_cache_path = match_cache_path.clone();
+                    async move {
+                        let result =
+                            get_leetify_match_cached(client, match_id.clone(), match_cache_path)
+                                .await;
+                        (match_id, result)
+                    }
+                });
+            let results = futures::stream::iter(requests)
+                .buffer_unordered(MATCH_HYDRATION_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await;
+            let mut rate_limited = false;
+
+            for (match_id, result) in results {
+                match result {
+                    Ok(Some(game)) => {
+                        hydration.matches.insert(match_id, game);
+                    }
+                    Ok(None) => {
+                        eprintln!("Skipping unavailable or incomplete Leetify match {match_id}");
+                    }
+                    Err(error) if error.is_retryable() => {
+                        rate_limited |= error.is_rate_limited();
+                        retry_after = retry_after.max(error.retry_after());
+                        eprintln!(
+                            "Leetify match {match_id} hydration attempt {} failed and may be retried: {error}",
+                            attempt + 1
+                        );
+                        retry_match_ids.push(match_id);
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
+                        hydration.failed_match_ids.insert(match_id);
+                    }
+                }
             }
-            Ok(None) => {
-                eprintln!("Skipping unavailable or incomplete Leetify match {match_id}");
-            }
-            Err(error) => {
-                eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
-                hydration.failed_match_ids.insert(match_id);
+
+            offset = chunk_end;
+            if rate_limited {
+                // Stop issuing new requests during this rate-limit window. Matches
+                // not attempted in this round join the coordinated retry batch.
+                retry_match_ids.extend_from_slice(&pending_match_ids[offset..]);
+                break;
             }
         }
+
+        retry_match_ids.sort();
+        retry_match_ids.dedup();
+        if retry_match_ids.is_empty() {
+            break;
+        }
+        if attempt + 1 == MATCH_HYDRATION_MAX_ATTEMPTS {
+            hydration.failed_match_ids.extend(retry_match_ids);
+            break;
+        }
+
+        let Some(delay) = hydration_retry_delay(attempt, retry_after) else {
+            eprintln!(
+                "Leetify requested a retry delay longer than {} seconds; deferring {} matches",
+                MATCH_HYDRATION_MAX_RETRY_DELAY.as_secs(),
+                retry_match_ids.len()
+            );
+            hydration.failed_match_ids.extend(retry_match_ids);
+            break;
+        };
+        eprintln!(
+            "Retrying {} Leetify match requests in {} seconds",
+            retry_match_ids.len(),
+            delay.as_secs()
+        );
+        tokio::time::sleep(delay).await;
+        pending_match_ids = retry_match_ids;
     }
     hydration
 }
@@ -1309,6 +1448,20 @@ mod tests {
         assert!(match_cache_file_path(Path::new("cache"), "../match").is_none());
         assert!(match_cache_file_path(Path::new("cache"), "match/id").is_none());
         assert!(match_cache_file_path(Path::new("cache"), "safe-match_id").is_some());
+    }
+
+    #[test]
+    fn match_hydration_retry_delay_is_bounded_and_honors_server_hint() {
+        assert_eq!(hydration_retry_delay(0, None), Some(Duration::from_secs(2)));
+        assert_eq!(hydration_retry_delay(1, None), Some(Duration::from_secs(4)));
+        assert_eq!(
+            hydration_retry_delay(0, Some(Duration::from_secs(12))),
+            Some(Duration::from_secs(12))
+        );
+        assert_eq!(
+            hydration_retry_delay(0, Some(Duration::from_secs(31))),
+            None
+        );
     }
 
     #[test]
