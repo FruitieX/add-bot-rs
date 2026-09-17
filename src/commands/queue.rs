@@ -212,13 +212,6 @@ struct TeamObservationKey {
     queued_side: Vec<SteamID>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ObservationCandidate {
-    observation: TeamObservation,
-    map_name: String,
-    scores: (u32, u32),
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PredictionStats {
     // Composition-weighted totals used by the lineup-aware estimate.
@@ -230,15 +223,6 @@ struct PredictionStats {
     observed_ties: usize,
     unique_observations: usize,
     unique_matches: usize,
-}
-
-fn prediction_result(game: &services::leetify::LeetifyGame) -> Option<PredictionResult> {
-    match game.match_result.as_str() {
-        "win" => Some(PredictionResult::Win),
-        "loss" => Some(PredictionResult::Loss),
-        "tie" => Some(PredictionResult::Tie),
-        _ => None,
-    }
 }
 
 fn observation_weight(
@@ -276,6 +260,104 @@ fn queued_side_sort_key(side: &[SteamID]) -> String {
 }
 
 #[cfg(test)]
+fn test_hydrated_matches(
+    histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
+) -> HashMap<String, services::leetify::LeetifyMatch> {
+    let mut games_by_id = HashMap::<String, Vec<services::leetify::LeetifyGame>>::new();
+    for games in histories.values() {
+        for game in games {
+            if let Some(match_id) = game.id.clone() {
+                games_by_id.entry(match_id).or_default().push(game.clone());
+            }
+        }
+    }
+
+    games_by_id
+        .into_iter()
+        .filter_map(|(match_id, games)| {
+            let reference = games.first()?.clone();
+            let mut sides = Vec::<services::leetify::LeetifyGame>::new();
+
+            for game in games {
+                let mut roster = game.own_team_steam64_ids.clone();
+                roster.sort_by_key(ToString::to_string);
+                roster.dedup();
+
+                if let Some(existing) = sides.iter_mut().find(|existing| {
+                    let mut existing_roster = existing.own_team_steam64_ids.clone();
+                    existing_roster.sort_by_key(ToString::to_string);
+                    existing_roster.dedup();
+                    roster.iter().all(|id| existing_roster.contains(id))
+                        || existing_roster.iter().all(|id| roster.contains(id))
+                }) {
+                    if existing.match_result != game.match_result
+                        || existing.game_finished_at != game.game_finished_at
+                        || existing.map_name != game.map_name
+                        || existing.scores != game.scores
+                    {
+                        return None;
+                    }
+                    if roster.len() > existing.own_team_steam64_ids.len() {
+                        *existing = game;
+                    }
+                } else {
+                    sides.push(game);
+                }
+            }
+
+            if sides.len() > 2 {
+                return None;
+            }
+            if sides.len() == 2
+                && (sides[0].scores.0 != sides[1].scores.1
+                    || sides[0].scores.1 != sides[1].scores.0)
+            {
+                return None;
+            }
+
+            let mut teams = sides
+                .iter()
+                .enumerate()
+                .map(|(side_index, side)| {
+                    let mut steam64_ids = side.own_team_steam64_ids.clone();
+                    steam64_ids.sort_by_key(ToString::to_string);
+                    steam64_ids.dedup();
+                    while steam64_ids.len() < QUEUE_SIZE {
+                        steam64_ids.push(SteamID::new(format!(
+                            "test-filler-{match_id}-{side_index}-{}",
+                            steam64_ids.len()
+                        )));
+                    }
+                    services::leetify::LeetifyMatchTeam {
+                        steam64_ids,
+                        score: side.scores.0,
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            if teams.len() == 1 {
+                teams.push(services::leetify::LeetifyMatchTeam {
+                    steam64_ids: (0..QUEUE_SIZE)
+                        .map(|index| SteamID::new(format!("test-opponent-{match_id}-{index}")))
+                        .collect(),
+                    score: reference.scores.1,
+                });
+            }
+
+            Some((
+                match_id.clone(),
+                services::leetify::LeetifyMatch {
+                    id: match_id,
+                    game_finished_at: reference.game_finished_at,
+                    map_name: reference.map_name.clone(),
+                    teams,
+                },
+            ))
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn build_team_observations(
     queue_steam_ids: &[SteamID],
     histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
@@ -296,22 +378,22 @@ fn build_team_observations_with_configured(
     configured_steam_ids: &HashSet<SteamID>,
     histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
 ) -> Vec<TeamObservation> {
-    build_team_observations_with_limit(
+    let candidate_match_ids = select_candidate_match_ids(
+        queue_steam_ids,
+        histories,
+        services::leetify::RECENT_MATCHES_LIMIT,
+    );
+    let hydrated_matches = test_hydrated_matches(histories);
+    build_team_observations_from_matches(
         current_queue_size,
         queue_steam_ids,
         configured_steam_ids,
-        histories,
-        services::leetify::RECENT_MATCHES_LIMIT,
+        &candidate_match_ids,
+        &hydrated_matches,
     )
 }
 
-/// Build one observation per `(match_id, queued_side)` from each player's
-/// newest match window. The window controls candidate inclusion; the complete
-/// historical side controls the overlap. The observation weight combines the
-/// current-lineup overlap with historical matchmaking-context similarity:
-/// `current_overlap * (5 - abs(historical_configured_count - queue_size))`.
-/// A queued teammate can contribute to overlap even when that teammate's own
-/// history did not select the match in its own newest requested match window.
+#[cfg(test)]
 fn build_team_observations_with_limit(
     current_queue_size: usize,
     queue_steam_ids: &[SteamID],
@@ -319,42 +401,111 @@ fn build_team_observations_with_limit(
     histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
     match_count: usize,
 ) -> Vec<TeamObservation> {
-    let queue_steam_ids: HashSet<SteamID> = queue_steam_ids.iter().cloned().collect();
-    let mut candidates: HashMap<TeamObservationKey, Vec<ObservationCandidate>> = HashMap::new();
+    let candidate_match_ids = select_candidate_match_ids(queue_steam_ids, histories, match_count);
+    let hydrated_matches = test_hydrated_matches(histories);
+    build_team_observations_from_matches(
+        current_queue_size,
+        queue_steam_ids,
+        configured_steam_ids,
+        &candidate_match_ids,
+        &hydrated_matches,
+    )
+}
 
-    for (queried_steam_id, games) in histories {
+/// Select the union of match IDs from each queued player's newest match
+/// window. Histories fetched for other active queues cannot introduce matches
+/// into this queue's candidate set.
+fn select_candidate_match_ids(
+    queue_steam_ids: &[SteamID],
+    histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
+    match_count: usize,
+) -> HashSet<String> {
+    let mut candidate_match_ids = HashSet::new();
+
+    for queried_steam_id in queue_steam_ids {
+        let Some(games) = histories.get(queried_steam_id) else {
+            continue;
+        };
         for game in select_recent_games_with_limit(games, match_count) {
             // A history entry must describe the requested player's perspective.
             // public_match_to_game() enforces this for API data, but keeping the
-            // invariant here also protects the aggregation from malformed input.
+            // invariant here also protects candidate selection from malformed input.
             if !game.own_team_steam64_ids.contains(queried_steam_id) {
                 continue;
             }
 
-            let Some(match_id) = game.id.clone().filter(|id| !id.is_empty()) else {
-                continue;
-            };
-            let Some(result) = prediction_result(&game) else {
-                continue;
+            if let Some(match_id) = game.id.filter(|id| !id.is_empty()) {
+                candidate_match_ids.insert(match_id);
+            }
+        }
+    }
+
+    candidate_match_ids
+}
+
+/// Build one observation per `(match_id, queued_side)` from hydrated match
+/// details. The profile-history windows only select candidate IDs; complete
+/// historical sides determine lineup overlap and configured-player context.
+/// A queued player can therefore contribute to overlap even when their own
+/// history did not select or could not fetch that match.
+fn build_team_observations_from_matches(
+    current_queue_size: usize,
+    queue_steam_ids: &[SteamID],
+    configured_steam_ids: &HashSet<SteamID>,
+    candidate_match_ids: &HashSet<String>,
+    hydrated_matches: &HashMap<String, services::leetify::LeetifyMatch>,
+) -> Vec<TeamObservation> {
+    let queue_steam_ids: HashSet<SteamID> = queue_steam_ids.iter().cloned().collect();
+    let mut candidates: HashMap<TeamObservationKey, Vec<TeamObservation>> = HashMap::new();
+    let mut sorted_match_ids = candidate_match_ids.iter().collect::<Vec<_>>();
+    sorted_match_ids.sort();
+
+    for match_id in sorted_match_ids {
+        let Some(game) = hydrated_matches.get(match_id) else {
+            continue;
+        };
+        if game.id != *match_id || game.map_name.is_empty() || game.teams.len() != 2 {
+            continue;
+        }
+
+        let all_players = game
+            .teams
+            .iter()
+            .flat_map(|team| team.steam64_ids.iter())
+            .collect::<HashSet<_>>();
+        if game
+            .teams
+            .iter()
+            .any(|team| team.steam64_ids.len() != QUEUE_SIZE)
+            || all_players.len() != QUEUE_SIZE * 2
+        {
+            continue;
+        }
+
+        for (team_index, team) in game.teams.iter().enumerate() {
+            let opponent = &game.teams[1 - team_index];
+            let result = match team.score.cmp(&opponent.score) {
+                Ordering::Greater => PredictionResult::Win,
+                Ordering::Less => PredictionResult::Loss,
+                Ordering::Equal => PredictionResult::Tie,
             };
 
-            let mut historical_roster = game.own_team_steam64_ids.clone();
+            let mut historical_roster = team.steam64_ids.clone();
             historical_roster.sort_by_key(ToString::to_string);
             historical_roster.dedup();
 
-            let mut queued_side: Vec<SteamID> = historical_roster
+            let mut queued_side = historical_roster
                 .iter()
                 .filter(|steam_id| queue_steam_ids.contains(*steam_id))
                 .cloned()
-                .collect();
+                .collect::<Vec<_>>();
             queued_side.sort_by_key(ToString::to_string);
-            queued_side.dedup();
             if queued_side.is_empty() {
                 continue;
             }
 
             let key = TeamObservationKey {
-                match_id: match_id.clone(),
+                match_id: game.id.clone(),
                 queued_side: queued_side.clone(),
             };
             let current_overlap = key.queued_side.len();
@@ -367,60 +518,33 @@ fn build_team_observations_with_limit(
             let unconfigured_count = historical_roster
                 .len()
                 .saturating_sub(historical_configured_count);
-            candidates
-                .entry(key)
-                .or_default()
-                .push(ObservationCandidate {
-                    observation: TeamObservation {
-                        match_id,
-                        queued_side,
-                        result,
-                        current_overlap,
-                        historical_configured_count,
-                        configured_outside_count,
-                        unconfigured_count,
-                        historical_roster,
-                        weight: observation_weight(
-                            current_queue_size,
-                            current_overlap,
-                            historical_configured_count,
-                        ),
-                        game_finished_at: game.game_finished_at,
-                    },
-                    map_name: game.map_name,
-                    scores: game.scores,
-                });
+            candidates.entry(key).or_default().push(TeamObservation {
+                match_id: game.id.clone(),
+                queued_side,
+                result,
+                current_overlap,
+                historical_configured_count,
+                configured_outside_count,
+                unconfigured_count,
+                historical_roster,
+                weight: observation_weight(
+                    current_queue_size,
+                    current_overlap,
+                    historical_configured_count,
+                ),
+                game_finished_at: game.game_finished_at,
+            });
         }
     }
 
     let mut observations = candidates
         .into_values()
         .filter_map(|candidates| {
-            let reference = candidates
+            let reference = candidates.first()?;
+            candidates
                 .iter()
-                .max_by_key(|candidate| candidate.observation.historical_roster.len())?;
-            let reference_roster = reference.observation.historical_roster.clone();
-            let is_consistent = candidates.iter().all(|candidate| {
-                let candidate_roster = &candidate.observation.historical_roster;
-                candidate.observation.result == reference.observation.result
-                    && candidate.observation.game_finished_at
-                        == reference.observation.game_finished_at
-                    && candidate.map_name == reference.map_name
-                    && candidate.scores == reference.scores
-                    && candidate_roster
-                        .iter()
-                        .all(|steam_id| reference_roster.contains(steam_id))
-            });
-
-            // Prefer a complete compatible roster when duplicate copies differ
-            // only because one response omitted some historical teammates.
-            // Contradictory duplicate data is rejected rather than depending
-            // on HashMap or history iteration order.
-            if is_consistent {
-                Some(reference.observation.clone())
-            } else {
-                None
-            }
+                .all(|candidate| candidate == reference)
+                .then(|| reference.clone())
         })
         .collect::<Vec<_>>();
 
@@ -619,38 +743,58 @@ pub async fn predictions(
         .cloned()
         .collect::<HashSet<_>>();
 
-    let queue_lines = queues
+    let queue_prediction_inputs = queues
         .iter()
-        .map(|(queue_id, queue)| {
-            let players = queue.get_players().0;
-            let queue_steam_ids = players
+        .map(|(_, queue)| {
+            let queue_steam_ids = queue
+                .get_players()
+                .0
                 .iter()
                 .filter_map(|username| player_steam_ids.get(username).cloned())
                 .collect::<Vec<_>>();
-            let observations = build_team_observations_with_limit(
-                players.len(),
-                &queue_steam_ids,
-                &configured_steam_ids,
-                &histories,
-                match_count,
-            );
-            let available_histories = players
-                .iter()
-                .filter(|username| {
-                    player_steam_ids
-                        .get(*username)
-                        .is_some_and(|steam_id| histories.contains_key(steam_id))
-                })
-                .count();
-
-            format_prediction_line(
-                queue_id,
-                queue.size(),
-                players.len(),
-                available_histories,
-                aggregate_prediction(&observations),
-            )
+            let candidate_match_ids =
+                select_candidate_match_ids(&queue_steam_ids, &histories, match_count);
+            (queue_steam_ids, candidate_match_ids)
         })
+        .collect::<Vec<_>>();
+    let candidate_match_ids = queue_prediction_inputs
+        .iter()
+        .flat_map(|(_, match_ids)| match_ids.iter().cloned())
+        .collect::<HashSet<_>>();
+    let hydrated_matches =
+        services::leetify::get_leetify_matches(settings, candidate_match_ids).await;
+
+    let queue_lines = queues
+        .iter()
+        .zip(queue_prediction_inputs.iter())
+        .map(
+            |((queue_id, queue), (queue_steam_ids, candidate_match_ids))| {
+                let players = queue.get_players().0;
+                let observations = build_team_observations_from_matches(
+                    players.len(),
+                    queue_steam_ids,
+                    &configured_steam_ids,
+                    candidate_match_ids,
+                    &hydrated_matches,
+                );
+                let available_histories = players
+                    .iter()
+                    .filter(|username| {
+                        player_steam_ids
+                            .get(*username)
+                            .is_some_and(|steam_id| histories.contains_key(steam_id))
+                    })
+                    .count();
+
+                format_prediction_line(
+                    queue_id,
+                    queue.size(),
+                    players.len(),
+                    available_histories,
+                    aggregate_prediction(&observations),
+                )
+            },
+        )
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -693,6 +837,32 @@ mod tests {
             teammates_flashed: None,
             flashbangs_thrown: None,
             rounds_count: None,
+        }
+    }
+
+    fn hydrated_match(
+        id: &str,
+        first_team: &[&str],
+        first_score: u32,
+        second_team: &[&str],
+        second_score: u32,
+        minutes_ago: i64,
+    ) -> services::leetify::LeetifyMatch {
+        services::leetify::LeetifyMatch {
+            id: id.to_string(),
+            game_finished_at: Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap()
+                - Duration::minutes(minutes_ago),
+            map_name: "de_nuke".to_string(),
+            teams: vec![
+                services::leetify::LeetifyMatchTeam {
+                    steam64_ids: first_team.iter().map(|id| steam_id(id)).collect(),
+                    score: first_score,
+                },
+                services::leetify::LeetifyMatchTeam {
+                    steam64_ids: second_team.iter().map(|id| steam_id(id)).collect(),
+                    score: second_score,
+                },
+            ],
         }
     }
 
@@ -861,6 +1031,109 @@ mod tests {
         assert_eq!(observation_weight(5, 5, 5), 25);
         assert_eq!(observation_weight(5, 4, 5), 20);
         assert_eq!(observation_weight(5, 3, 3), 9);
+    }
+
+    #[test]
+    fn prediction_uses_hydrated_roster_instead_of_player_scoped_history_stats() {
+        let queue = vec![steam_id("A"), steam_id("B")];
+        let histories = histories(vec![
+            ("A", vec![game("shared", &["A"], "win", 1)]),
+            ("B", vec![game("shared", &["B"], "win", 1)]),
+        ]);
+        let candidate_match_ids = select_candidate_match_ids(&queue, &histories, 30);
+        let hydrated_matches = HashMap::from([(
+            "shared".to_string(),
+            hydrated_match(
+                "shared",
+                &["A", "B", "u1", "u2", "u3"],
+                13,
+                &["x1", "x2", "x3", "x4", "x5"],
+                9,
+                1,
+            ),
+        )]);
+
+        let observations = build_team_observations_from_matches(
+            queue.len(),
+            &queue,
+            &configured(&["A", "B"]),
+            &candidate_match_ids,
+            &hydrated_matches,
+        );
+
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].current_overlap, 2);
+        assert_eq!(observations[0].historical_configured_count, 2);
+        assert_eq!(observations[0].unconfigured_count, 3);
+        assert_win_loss(aggregate_prediction(&observations), 10, 0);
+    }
+
+    #[test]
+    fn hydrated_match_adds_queued_opponent_without_their_own_history() {
+        let queue = vec![steam_id("A"), steam_id("B"), steam_id("C")];
+        let histories = histories(vec![("A", vec![game("opponents", &["A"], "win", 1)])]);
+        let candidate_match_ids = select_candidate_match_ids(&queue, &histories, 30);
+        let hydrated_matches = HashMap::from([(
+            "opponents".to_string(),
+            hydrated_match(
+                "opponents",
+                &["A", "B", "u1", "u2", "u3"],
+                13,
+                &["C", "x1", "x2", "x3", "x4"],
+                9,
+                1,
+            ),
+        )]);
+
+        let observations = build_team_observations_from_matches(
+            queue.len(),
+            &queue,
+            &configured(&["A", "B", "C"]),
+            &candidate_match_ids,
+            &hydrated_matches,
+        );
+
+        assert_eq!(observations.len(), 2);
+        assert_win_loss(aggregate_prediction(&observations), 8, 3);
+    }
+
+    #[test]
+    fn candidate_selection_is_scoped_to_the_current_queue() {
+        let histories = histories(vec![
+            ("A", vec![game("a-match", &["A"], "win", 1)]),
+            ("B", vec![game("b-match", &["B"], "loss", 1)]),
+        ]);
+
+        let candidate_match_ids = select_candidate_match_ids(&[steam_id("A")], &histories, 30);
+
+        assert_eq!(candidate_match_ids, HashSet::from(["a-match".to_string()]));
+    }
+
+    #[test]
+    fn prediction_rejects_incomplete_hydrated_rosters() {
+        let queue = vec![steam_id("A")];
+        let candidate_match_ids = HashSet::from(["incomplete".to_string()]);
+        let hydrated_matches = HashMap::from([(
+            "incomplete".to_string(),
+            hydrated_match(
+                "incomplete",
+                &["A"],
+                13,
+                &["x1", "x2", "x3", "x4", "x5"],
+                9,
+                1,
+            ),
+        )]);
+
+        let observations = build_team_observations_from_matches(
+            queue.len(),
+            &queue,
+            &configured(&["A"]),
+            &candidate_match_ids,
+            &hydrated_matches,
+        );
+
+        assert!(observations.is_empty());
     }
 
     #[test]
@@ -1086,8 +1359,8 @@ mod tests {
     fn prediction_equal_opposing_overlap_contributes_one_each() {
         let queue = vec![steam_id("A"), steam_id("B")];
         let histories = histories(vec![
-            ("A", vec![game("opponents", &["A", "outside"], "win", 1)]),
-            ("B", vec![game("opponents", &["B", "outside"], "loss", 1)]),
+            ("A", vec![game("opponents", &["A", "outside-a"], "win", 1)]),
+            ("B", vec![game("opponents", &["B", "outside-b"], "loss", 1)]),
         ]);
 
         let stats = prediction_stats(&queue, &histories);
@@ -1114,7 +1387,7 @@ mod tests {
         assert_eq!(winning_side.current_overlap, 2);
         assert_eq!(winning_side.historical_configured_count, 2);
         assert_eq!(winning_side.configured_outside_count, 0);
-        assert_eq!(winning_side.unconfigured_count, 1);
+        assert_eq!(winning_side.unconfigured_count, 3);
         assert_eq!(winning_side.weight, 8);
         assert_win_loss(aggregate_prediction(&observations), 8, 3);
     }

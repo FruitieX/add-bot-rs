@@ -60,6 +60,17 @@ impl LeetifyClient {
 
         Ok(request.send().await?.error_for_status()?.json().await?)
     }
+
+    async fn get_path<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
+        let mut request = self.client.get(&url);
+
+        if let Some(api_key) = &self.api_key {
+            request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
+        }
+
+        Ok(request.send().await?.error_for_status()?.json().await?)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -138,6 +149,20 @@ struct PublicPlayerMatchStats {
     rounds_count: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeetifyMatchTeam {
+    pub steam64_ids: Vec<SteamID>,
+    pub score: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeetifyMatch {
+    pub id: String,
+    pub game_finished_at: DateTime<Utc>,
+    pub map_name: String,
+    pub teams: Vec<LeetifyMatchTeam>,
+}
+
 async fn get_leetify_profile(settings: &Settings, steam_id: &SteamID) -> Result<PublicProfile> {
     LeetifyClient::from_settings(settings)
         .get("/v3/profile", steam_id)
@@ -168,6 +193,9 @@ fn public_match_to_game(game: PublicMatch, steam_id: &SteamID) -> Option<Leetify
         .iter()
         .find(|player| player.steam64_id == steam_id.to_string())?;
 
+    // `/v3/profile/matches` is player-scoped, so this only records teammates
+    // present in that response. Consumers needing an authoritative roster must
+    // hydrate the match through `/v2/matches/{id}`.
     let own_team_steam64_ids = game
         .stats
         .iter()
@@ -208,6 +236,56 @@ fn public_match_to_game(game: PublicMatch, steam_id: &SteamID) -> Option<Leetify
     })
 }
 
+fn public_match_to_match(game: PublicMatch) -> Option<LeetifyMatch> {
+    if game.team_scores.len() != 2 {
+        return None;
+    }
+
+    let mut team_numbers = HashSet::new();
+    let mut all_players = HashSet::new();
+    let mut teams = Vec::with_capacity(2);
+
+    for team_score in &game.team_scores {
+        if !team_numbers.insert(team_score.team_number) {
+            return None;
+        }
+
+        let mut steam64_ids = game
+            .stats
+            .iter()
+            .filter(|player| player.initial_team_number == team_score.team_number)
+            .map(|player| SteamID::new(player.steam64_id.clone()))
+            .collect::<Vec<_>>();
+        steam64_ids.sort_by_key(ToString::to_string);
+        steam64_ids.dedup();
+
+        // Prediction context cannot be inferred from a player-scoped or
+        // otherwise incomplete response. Only hydrate complete CS2 sides.
+        if steam64_ids.len() != 5
+            || steam64_ids
+                .iter()
+                .any(|steam_id| steam_id.to_string().trim().is_empty())
+            || !steam64_ids
+                .iter()
+                .all(|steam_id| all_players.insert(steam_id.clone()))
+        {
+            return None;
+        }
+
+        teams.push(LeetifyMatchTeam {
+            steam64_ids,
+            score: team_score.score,
+        });
+    }
+
+    Some(LeetifyMatch {
+        id: game.id,
+        game_finished_at: game.finished_at,
+        map_name: game.map_name,
+        teams,
+    })
+}
+
 #[cached(ttl_secs = 300, key = "SteamID", convert = r#"{ steam_id.clone() }"#)]
 async fn get_leetify_games_cached(
     client: LeetifyClient,
@@ -244,6 +322,40 @@ pub(crate) async fn get_leetify_games(
 ) -> Option<Vec<LeetifyGame>> {
     let client = LeetifyClient::from_settings(settings);
     get_leetify_games_with_client(&client, steam_id).await
+}
+
+#[cached(ttl_secs = 300, key = "String", convert = r#"{ match_id.clone() }"#)]
+async fn get_leetify_match_cached(client: LeetifyClient, match_id: String) -> Result<LeetifyMatch> {
+    let path = format!("/v2/matches/{match_id}");
+    let game = client.get_path::<PublicMatch>(&path).await?;
+    public_match_to_match(game)
+        .ok_or_else(|| eyre!("Leetify match {match_id} did not contain two complete teams"))
+}
+
+pub(crate) async fn get_leetify_matches(
+    settings: &Settings,
+    match_ids: HashSet<String>,
+) -> HashMap<String, LeetifyMatch> {
+    let client = LeetifyClient::from_settings(settings);
+    let requests = match_ids.into_iter().map(|match_id| {
+        let client = client.clone();
+        async move {
+            let result = get_leetify_match_cached(client, match_id.clone()).await;
+            match result {
+                Ok(game) => Some((match_id, game)),
+                Err(error) => {
+                    eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
+                    None
+                }
+            }
+        }
+    });
+
+    futures::stream::iter(requests)
+        .buffer_unordered(5)
+        .filter_map(|game| async move { game })
+        .collect()
+        .await
 }
 
 async fn get_configured_player_games(settings: &Settings) -> HashMap<SteamID, Vec<LeetifyGame>> {
@@ -347,6 +459,8 @@ pub fn steamid_for_username(settings: Settings, username: &Username) -> Option<S
 pub struct LeetifyGame {
     #[serde(default)]
     pub id: Option<String>,
+    /// Player-side IDs present in the source response. Profile-match responses
+    /// may contain only the queried player, so this is not always a full roster.
     pub own_team_steam64_ids: Vec<SteamID>,
     pub game_finished_at: DateTime<Utc>,
     pub map_name: String,
@@ -1168,6 +1282,73 @@ mod tests {
     }
 
     #[test]
+    fn public_match_hydrates_two_complete_teams() {
+        let stats = (0..5)
+            .flat_map(|index| {
+                [("a", 2), ("b", 3)].map(|(prefix, initial_team_number)| PublicPlayerMatchStats {
+                    steam64_id: format!("{prefix}-{index}"),
+                    initial_team_number,
+                    flashbang_hit_friend: 0,
+                    flashbang_thrown: 0,
+                    rounds_count: 22,
+                })
+            })
+            .collect();
+        let game = PublicMatch {
+            id: "complete-match".to_string(),
+            finished_at: Utc::now(),
+            map_name: "de_mirage".to_string(),
+            team_scores: vec![
+                PublicTeamScore {
+                    team_number: 2,
+                    score: 13,
+                },
+                PublicTeamScore {
+                    team_number: 3,
+                    score: 9,
+                },
+            ],
+            stats,
+        };
+
+        let hydrated = public_match_to_match(game).expect("complete match should hydrate");
+
+        assert_eq!(hydrated.teams.len(), 2);
+        assert_eq!(hydrated.teams[0].steam64_ids.len(), 5);
+        assert_eq!(hydrated.teams[0].score, 13);
+        assert_eq!(hydrated.teams[1].steam64_ids.len(), 5);
+        assert_eq!(hydrated.teams[1].score, 9);
+    }
+
+    #[test]
+    fn public_match_does_not_treat_player_scoped_stats_as_a_complete_roster() {
+        let game = PublicMatch {
+            id: "player-scoped-match".to_string(),
+            finished_at: Utc::now(),
+            map_name: "de_mirage".to_string(),
+            team_scores: vec![
+                PublicTeamScore {
+                    team_number: 2,
+                    score: 13,
+                },
+                PublicTeamScore {
+                    team_number: 3,
+                    score: 9,
+                },
+            ],
+            stats: vec![PublicPlayerMatchStats {
+                steam64_id: PUBLIC_TEST_STEAM_ID.to_string(),
+                initial_team_number: 2,
+                flashbang_hit_friend: 0,
+                flashbang_thrown: 0,
+                rounds_count: 22,
+            }],
+        };
+
+        assert!(public_match_to_match(game).is_none());
+    }
+
+    #[test]
     fn average_recent_match_duration_uses_the_newest_thirty_matches() {
         let make_game = |id: String, minutes_ago: i64, rounds_count: u32| LeetifyGame {
             id: Some(id),
@@ -1424,5 +1605,14 @@ mod tests {
             .await
             .expect("public match history request should succeed");
         assert!(!matches.is_empty());
+
+        let match_id = matches[0].id.clone();
+        let details = LeetifyClient::from_settings(&settings)
+            .get_path::<PublicMatch>(&format!("/v2/matches/{match_id}"))
+            .await
+            .expect("public match detail request should succeed");
+        let hydrated = public_match_to_match(details)
+            .expect("public match detail should contain two complete teams");
+        assert_eq!(hydrated.id, match_id);
     }
 }
