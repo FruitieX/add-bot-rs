@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -54,6 +54,9 @@ pub struct WeatherSettings {
 pub struct LeetifySettings {
     /// Optional API key from https://leetify.com/app/developer
     pub api_key: Option<String>,
+
+    /// Optional directory for persistently caching immutable match details.
+    pub match_cache_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Deserialize, Debug)]
@@ -72,8 +75,17 @@ pub struct Settings {
 }
 
 pub fn read_settings() -> Result<Settings, config::ConfigError> {
-    config::Config::builder()
+    let mut settings = config::Config::builder()
         .add_source(config::File::with_name("Settings"))
         .build()?
-        .try_deserialize::<Settings>()
+        .try_deserialize::<Settings>()?;
+
+    if let Some(path) = std::env::var_os("ADD_BOT_LEETIFY_MATCH_CACHE_PATH") {
+        settings
+            .leetify
+            .get_or_insert_with(LeetifySettings::default)
+            .match_cache_path = Some(path.into());
+    }
+
+    Ok(settings)
 }

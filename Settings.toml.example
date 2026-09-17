@@ -17,6 +17,9 @@ display_name = "Helsinki, FI"
 # Obtain one at https://leetify.com/app/developer
 #[leetify]
 #api_key = "<Leetify API key>"
+# Optional persistent cache for immutable match roster/score details used by /predict.
+# This can also be set with ADD_BOT_LEETIFY_MATCH_CACHE_PATH.
+#match_cache_path = "leetify-match-cache"
 
 # Optional settings for the /el forecast shown when queues are active.
 # Defaults are a 500 W gaming PC and Caruna Espoo Yleissiirto at 2.77 c/kWh

@@ -2,10 +2,12 @@ use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
 use color_eyre::{eyre::eyre, Result};
 use futures::StreamExt;
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
 use crate::{
@@ -14,6 +16,8 @@ use crate::{
 };
 
 const LEETIFY_API_BASE_URL: &str = "https://api-public.cs-prod.leetify.com";
+const MATCH_HYDRATION_CONCURRENCY: usize = 2;
+static MATCH_CACHE_TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn unwrap_or_log<T, E: Display>(result: std::result::Result<T, E>, err_context: &str) -> Option<T> {
     match result {
@@ -61,7 +65,17 @@ impl LeetifyClient {
         Ok(request.send().await?.error_for_status()?.json().await?)
     }
 
+    #[cfg(test)]
     async fn get_path<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        Ok(self
+            .get_path_response(path)
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    async fn get_path_response(&self, path: &str) -> Result<reqwest::Response> {
         let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
         let mut request = self.client.get(&url);
 
@@ -69,7 +83,7 @@ impl LeetifyClient {
             request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
         }
 
-        Ok(request.send().await?.error_for_status()?.json().await?)
+        Ok(request.send().await?)
     }
 }
 
@@ -149,18 +163,24 @@ struct PublicPlayerMatchStats {
     rounds_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct LeetifyMatchTeam {
     pub steam64_ids: Vec<SteamID>,
     pub score: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct LeetifyMatch {
     pub id: String,
     pub game_finished_at: DateTime<Utc>,
     pub map_name: String,
     pub teams: Vec<LeetifyMatchTeam>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LeetifyMatchHydration {
+    pub matches: HashMap<String, LeetifyMatch>,
+    pub failed_match_ids: HashSet<String>,
 }
 
 async fn get_leetify_profile(settings: &Settings, steam_id: &SteamID) -> Result<PublicProfile> {
@@ -324,38 +344,138 @@ pub(crate) async fn get_leetify_games(
     get_leetify_games_with_client(&client, steam_id).await
 }
 
-#[cached(ttl_secs = 300, key = "String", convert = r#"{ match_id.clone() }"#)]
-async fn get_leetify_match_cached(client: LeetifyClient, match_id: String) -> Result<LeetifyMatch> {
+fn match_cache_file_path(cache_path: &Path, match_id: &str) -> Option<PathBuf> {
+    match_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        .then(|| cache_path.join(format!("{match_id}.json")))
+}
+
+async fn read_match_from_disk(cache_path: &Path, match_id: &str) -> Result<Option<LeetifyMatch>> {
+    let Some(path) = match_cache_file_path(cache_path, match_id) else {
+        return Err(eyre!("invalid Leetify match ID for cache path: {match_id}"));
+    };
+
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let game = serde_json::from_slice::<LeetifyMatch>(&bytes)?;
+    if game.id != match_id {
+        return Err(eyre!(
+            "cached Leetify match ID {} did not match requested ID {match_id}",
+            game.id
+        ));
+    }
+    Ok(Some(game))
+}
+
+async fn write_match_to_disk(cache_path: &Path, game: &LeetifyMatch) -> Result<()> {
+    let Some(path) = match_cache_file_path(cache_path, &game.id) else {
+        return Err(eyre!(
+            "invalid Leetify match ID for cache path: {}",
+            game.id
+        ));
+    };
+    tokio::fs::create_dir_all(cache_path).await?;
+
+    let counter = MATCH_CACHE_TEMP_FILE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let temporary_path = cache_path.join(format!(
+        ".{}.{}.{}.tmp",
+        game.id,
+        std::process::id(),
+        counter
+    ));
+    tokio::fs::write(&temporary_path, serde_json::to_vec(game)?).await?;
+    tokio::fs::rename(&temporary_path, path).await?;
+    Ok(())
+}
+
+#[cached(
+    max_size = 10000,
+    key = "(String, String, Option<PathBuf>)",
+    convert = r#"{ (client.base_url.clone(), match_id.clone(), match_cache_path.clone()) }"#
+)]
+async fn get_leetify_match_cached(
+    client: LeetifyClient,
+    match_id: String,
+    match_cache_path: Option<PathBuf>,
+) -> Result<Option<LeetifyMatch>> {
+    if let Some(cache_path) = &match_cache_path {
+        match read_match_from_disk(cache_path, &match_id).await {
+            Ok(Some(game)) => return Ok(Some(game)),
+            Ok(None) => {}
+            Err(error) => eprintln!(
+                "Failed to read cached Leetify match {match_id} from {}: {error}",
+                cache_path.display()
+            ),
+        }
+    }
+
     let path = format!("/v2/matches/{match_id}");
-    let game = client.get_path::<PublicMatch>(&path).await?;
-    public_match_to_match(game)
-        .ok_or_else(|| eyre!("Leetify match {match_id} did not contain two complete teams"))
+    let response = client.get_path_response(&path).await?;
+    let status = response.status();
+    if matches!(
+        status,
+        reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
+    ) {
+        return Ok(None);
+    }
+    let game = public_match_to_match(response.error_for_status()?.json::<PublicMatch>().await?);
+
+    if let (Some(cache_path), Some(game)) = (&match_cache_path, &game) {
+        if let Err(error) = write_match_to_disk(cache_path, game).await {
+            eprintln!(
+                "Failed to persist Leetify match {match_id} to {}: {error}",
+                cache_path.display()
+            );
+        }
+    }
+
+    Ok(game)
 }
 
 pub(crate) async fn get_leetify_matches(
     settings: &Settings,
     match_ids: HashSet<String>,
-) -> HashMap<String, LeetifyMatch> {
+) -> LeetifyMatchHydration {
     let client = LeetifyClient::from_settings(settings);
+    let match_cache_path = settings
+        .leetify
+        .as_ref()
+        .and_then(|config| config.match_cache_path.clone());
+    let mut match_ids = match_ids.into_iter().collect::<Vec<_>>();
+    match_ids.sort();
     let requests = match_ids.into_iter().map(|match_id| {
         let client = client.clone();
+        let match_cache_path = match_cache_path.clone();
         async move {
-            let result = get_leetify_match_cached(client, match_id.clone()).await;
-            match result {
-                Ok(game) => Some((match_id, game)),
-                Err(error) => {
-                    eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
-                    None
-                }
-            }
+            let result = get_leetify_match_cached(client, match_id.clone(), match_cache_path).await;
+            (match_id, result)
         }
     });
 
-    futures::stream::iter(requests)
-        .buffer_unordered(5)
-        .filter_map(|game| async move { game })
-        .collect()
-        .await
+    let results = futures::stream::iter(requests)
+        .buffer_unordered(MATCH_HYDRATION_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    let mut hydration = LeetifyMatchHydration::default();
+    for (match_id, result) in results {
+        match result {
+            Ok(Some(game)) => {
+                hydration.matches.insert(match_id, game);
+            }
+            Ok(None) => {
+                eprintln!("Skipping unavailable or incomplete Leetify match {match_id}");
+            }
+            Err(error) => {
+                eprintln!("Failed to hydrate Leetify match {match_id}: {error}");
+                hydration.failed_match_ids.insert(match_id);
+            }
+        }
+    }
+    hydration
 }
 
 async fn get_configured_player_games(settings: &Settings) -> HashMap<SteamID, Vec<LeetifyGame>> {
@@ -1150,6 +1270,46 @@ mod tests {
     use std::collections::HashMap;
 
     const PUBLIC_TEST_STEAM_ID: &str = "76561198016607756";
+
+    #[tokio::test]
+    async fn immutable_match_cache_round_trips_minimal_match_data() {
+        let cache_path = std::env::temp_dir().join(format!(
+            "add-bot-leetify-cache-test-{}-{}",
+            std::process::id(),
+            MATCH_CACHE_TEMP_FILE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        let game = LeetifyMatch {
+            id: "cache-test-match".to_string(),
+            game_finished_at: Utc::now(),
+            map_name: "de_cache".to_string(),
+            teams: vec![
+                LeetifyMatchTeam {
+                    steam64_ids: (1..=5).map(|id| SteamID::new(id.to_string())).collect(),
+                    score: 13,
+                },
+                LeetifyMatchTeam {
+                    steam64_ids: (6..=10).map(|id| SteamID::new(id.to_string())).collect(),
+                    score: 8,
+                },
+            ],
+        };
+
+        write_match_to_disk(&cache_path, &game).await.unwrap();
+        let restored = read_match_from_disk(&cache_path, &game.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(restored, game);
+        tokio::fs::remove_dir_all(&cache_path).await.unwrap();
+    }
+
+    #[test]
+    fn match_cache_rejects_unsafe_match_ids() {
+        assert!(match_cache_file_path(Path::new("cache"), "../match").is_none());
+        assert!(match_cache_file_path(Path::new("cache"), "match/id").is_none());
+        assert!(match_cache_file_path(Path::new("cache"), "safe-match_id").is_some());
+    }
 
     #[test]
     fn public_profile_maps_to_existing_stats_model() {

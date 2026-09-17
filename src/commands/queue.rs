@@ -592,6 +592,15 @@ fn aggregate_prediction(observations: &[TeamObservation]) -> Option<PredictionSt
     Some(stats)
 }
 
+fn has_failed_hydration(
+    candidate_match_ids: &HashSet<String>,
+    failed_match_ids: &HashSet<String>,
+) -> bool {
+    candidate_match_ids
+        .iter()
+        .any(|match_id| failed_match_ids.contains(match_id))
+}
+
 fn win_percentage(wins: usize, losses: usize) -> f32 {
     if wins + losses == 0 {
         0.0
@@ -759,8 +768,7 @@ pub async fn predictions(
         .iter()
         .flat_map(|(_, match_ids)| match_ids.iter().cloned())
         .collect::<HashSet<_>>();
-    let hydrated_matches =
-        services::leetify::get_leetify_matches(settings, candidate_match_ids).await;
+    let hydration = services::leetify::get_leetify_matches(settings, candidate_match_ids).await;
 
     let queue_lines = queues
         .iter()
@@ -773,7 +781,7 @@ pub async fn predictions(
                     queue_steam_ids,
                     &configured_steam_ids,
                     candidate_match_ids,
-                    &hydrated_matches,
+                    &hydration.matches,
                 );
                 let available_histories = players
                     .iter()
@@ -784,12 +792,24 @@ pub async fn predictions(
                     })
                     .count();
 
+                let stats = if has_failed_hydration(
+                    candidate_match_ids,
+                    &hydration.failed_match_ids,
+                ) {
+                    eprintln!(
+                        "Prediction for queue {queue_id} unavailable because match hydration was incomplete"
+                    );
+                    None
+                } else {
+                    aggregate_prediction(&observations)
+                };
+
                 format_prediction_line(
                     queue_id,
                     queue.size(),
                     players.len(),
                     available_histories,
-                    aggregate_prediction(&observations),
+                    stats,
                 )
             },
         )
@@ -1489,6 +1509,18 @@ mod tests {
             line,
             "- <b>20:15</b> · <b>1/5 players</b>\n  <b>Recent results:</b> 14W / 15L / 1T (48%)\n  <b>Predicted win rate:</b> 48%"
         );
+    }
+
+    #[test]
+    fn prediction_rejects_partial_transient_hydration() {
+        let candidates = HashSet::from(["loaded".to_string(), "rate-limited".to_string()]);
+        let failed = HashSet::from(["rate-limited".to_string()]);
+
+        assert!(has_failed_hydration(&candidates, &failed));
+        assert!(!has_failed_hydration(
+            &HashSet::from(["loaded".to_string()]),
+            &failed,
+        ));
     }
 
     #[test]
