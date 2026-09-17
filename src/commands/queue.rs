@@ -9,7 +9,7 @@ use teloxide::{types::ChatId, Bot};
 use crate::{
     services,
     settings::Settings,
-    state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue, State},
+    state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue, State, QUEUE_SIZE},
     state_container::StateContainer,
     types::{QueueId, SteamID, Username},
     util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, send_msg},
@@ -197,7 +197,11 @@ struct TeamObservation {
     match_id: String,
     queued_side: Vec<SteamID>,
     result: PredictionResult,
-    overlap: usize,
+    current_overlap: usize,
+    historical_configured_count: usize,
+    configured_outside_count: usize,
+    unconfigured_count: usize,
+    historical_roster: Vec<SteamID>,
     weight: usize,
     game_finished_at: DateTime<Utc>,
 }
@@ -237,6 +241,16 @@ fn prediction_result(game: &services::leetify::LeetifyGame) -> Option<Prediction
     }
 }
 
+fn observation_weight(
+    current_queue_size: usize,
+    current_overlap: usize,
+    historical_configured_count: usize,
+) -> usize {
+    let context_score =
+        QUEUE_SIZE.saturating_sub(historical_configured_count.abs_diff(current_queue_size));
+    current_overlap * context_score
+}
+
 #[cfg(test)]
 fn select_recent_games(
     games: &[services::leetify::LeetifyGame],
@@ -266,8 +280,26 @@ fn build_team_observations(
     queue_steam_ids: &[SteamID],
     histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
 ) -> Vec<TeamObservation> {
-    build_team_observations_with_limit(
+    let configured_steam_ids = queue_steam_ids.iter().cloned().collect();
+    build_team_observations_with_configured(
+        queue_steam_ids.len(),
         queue_steam_ids,
+        &configured_steam_ids,
+        histories,
+    )
+}
+
+#[cfg(test)]
+fn build_team_observations_with_configured(
+    current_queue_size: usize,
+    queue_steam_ids: &[SteamID],
+    configured_steam_ids: &HashSet<SteamID>,
+    histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
+) -> Vec<TeamObservation> {
+    build_team_observations_with_limit(
+        current_queue_size,
+        queue_steam_ids,
+        configured_steam_ids,
         histories,
         services::leetify::RECENT_MATCHES_LIMIT,
     )
@@ -275,18 +307,19 @@ fn build_team_observations(
 
 /// Build one observation per `(match_id, queued_side)` from each player's
 /// newest match window. The window controls candidate inclusion; the complete
-/// historical side controls the overlap. The observation weight also includes
-/// the outside-lineup slots that will exist in a not-yet-full queue:
-/// `overlap + (5 - queued-player-count)`. In particular, a queued teammate
-/// can contribute to overlap even when that teammate's own history did not
-/// select the match in its own newest requested match window.
+/// historical side controls the overlap. The observation weight combines the
+/// current-lineup overlap with historical matchmaking-context similarity:
+/// `current_overlap * (5 - abs(historical_configured_count - queue_size))`.
+/// A queued teammate can contribute to overlap even when that teammate's own
+/// history did not select the match in its own newest requested match window.
 fn build_team_observations_with_limit(
+    current_queue_size: usize,
     queue_steam_ids: &[SteamID],
+    configured_steam_ids: &HashSet<SteamID>,
     histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
     match_count: usize,
 ) -> Vec<TeamObservation> {
     let queue_steam_ids: HashSet<SteamID> = queue_steam_ids.iter().cloned().collect();
-    let outside_lineup_slots = 5usize.saturating_sub(queue_steam_ids.len());
     let mut candidates: HashMap<TeamObservationKey, Vec<ObservationCandidate>> = HashMap::new();
 
     for (queried_steam_id, games) in histories {
@@ -305,8 +338,11 @@ fn build_team_observations_with_limit(
                 continue;
             };
 
-            let mut queued_side: Vec<SteamID> = game
-                .own_team_steam64_ids
+            let mut historical_roster = game.own_team_steam64_ids.clone();
+            historical_roster.sort_by_key(ToString::to_string);
+            historical_roster.dedup();
+
+            let mut queued_side: Vec<SteamID> = historical_roster
                 .iter()
                 .filter(|steam_id| queue_steam_ids.contains(*steam_id))
                 .cloned()
@@ -321,7 +357,16 @@ fn build_team_observations_with_limit(
                 match_id: match_id.clone(),
                 queued_side: queued_side.clone(),
             };
-            let overlap = key.queued_side.len();
+            let current_overlap = key.queued_side.len();
+            let historical_configured_count = historical_roster
+                .iter()
+                .filter(|steam_id| configured_steam_ids.contains(*steam_id))
+                .count();
+            let configured_outside_count =
+                historical_configured_count.saturating_sub(current_overlap);
+            let unconfigured_count = historical_roster
+                .len()
+                .saturating_sub(historical_configured_count);
             candidates
                 .entry(key)
                 .or_default()
@@ -330,8 +375,16 @@ fn build_team_observations_with_limit(
                         match_id,
                         queued_side,
                         result,
-                        overlap,
-                        weight: overlap + outside_lineup_slots,
+                        current_overlap,
+                        historical_configured_count,
+                        configured_outside_count,
+                        unconfigured_count,
+                        historical_roster,
+                        weight: observation_weight(
+                            current_queue_size,
+                            current_overlap,
+                            historical_configured_count,
+                        ),
                         game_finished_at: game.game_finished_at,
                     },
                     map_name: game.map_name,
@@ -343,17 +396,31 @@ fn build_team_observations_with_limit(
     let mut observations = candidates
         .into_values()
         .filter_map(|candidates| {
-            let first = candidates.first()?;
+            let reference = candidates
+                .iter()
+                .max_by_key(|candidate| candidate.observation.historical_roster.len())?;
+            let reference_roster = reference.observation.historical_roster.clone();
             let is_consistent = candidates.iter().all(|candidate| {
-                candidate.observation.result == first.observation.result
-                    && candidate.observation.game_finished_at == first.observation.game_finished_at
-                    && candidate.map_name == first.map_name
-                    && candidate.scores == first.scores
+                let candidate_roster = &candidate.observation.historical_roster;
+                candidate.observation.result == reference.observation.result
+                    && candidate.observation.game_finished_at
+                        == reference.observation.game_finished_at
+                    && candidate.map_name == reference.map_name
+                    && candidate.scores == reference.scores
+                    && candidate_roster
+                        .iter()
+                        .all(|steam_id| reference_roster.contains(steam_id))
             });
 
-            // Contradictory duplicate API data is not allowed to depend on
-            // HashMap iteration order. Reject that canonical observation.
-            is_consistent.then(|| first.observation.clone())
+            // Prefer a complete compatible roster when duplicate copies differ
+            // only because one response omitted some historical teammates.
+            // Contradictory duplicate data is rejected rather than depending
+            // on HashMap or history iteration order.
+            if is_consistent {
+                Some(reference.observation.clone())
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>();
 
@@ -545,6 +612,12 @@ pub async fn predictions(
 
     let steam_ids = player_steam_ids.values().cloned().collect();
     let histories = fetch_prediction_histories(settings, steam_ids).await;
+    let configured_steam_ids = settings
+        .players
+        .steamid_mappings
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
 
     let queue_lines = queues
         .iter()
@@ -554,8 +627,13 @@ pub async fn predictions(
                 .iter()
                 .filter_map(|username| player_steam_ids.get(username).cloned())
                 .collect::<Vec<_>>();
-            let observations =
-                build_team_observations_with_limit(&queue_steam_ids, &histories, match_count);
+            let observations = build_team_observations_with_limit(
+                players.len(),
+                &queue_steam_ids,
+                &configured_steam_ids,
+                &histories,
+                match_count,
+            );
             let available_histories = players
                 .iter()
                 .filter(|username| {
@@ -627,6 +705,10 @@ mod tests {
             .collect()
     }
 
+    fn configured(ids: &[&str]) -> HashSet<SteamID> {
+        ids.iter().map(|id| steam_id(id)).collect()
+    }
+
     fn prediction_stats(
         queue_steam_ids: &[SteamID],
         histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
@@ -640,8 +722,14 @@ mod tests {
         histories: &HashMap<SteamID, Vec<services::leetify::LeetifyGame>>,
         match_count: usize,
     ) -> Option<PredictionStats> {
-        let observations =
-            build_team_observations_with_limit(queue_steam_ids, histories, match_count);
+        let configured_steam_ids = queue_steam_ids.iter().cloned().collect();
+        let observations = build_team_observations_with_limit(
+            queue_steam_ids.len(),
+            queue_steam_ids,
+            &configured_steam_ids,
+            histories,
+            match_count,
+        );
         aggregate_prediction(&observations)
     }
 
@@ -712,14 +800,93 @@ mod tests {
     }
 
     #[test]
-    fn prediction_three_player_queue_uses_weights_five_four_and_three() {
+    fn prediction_one_player_queue_distinguishes_historical_context() {
+        let queue = vec![steam_id("A")];
+        let configured_steam_ids = configured(&["A", "B", "C", "D", "E"]);
+        let histories = histories(vec![(
+            "A",
+            vec![
+                game(
+                    "solo-context",
+                    &["A", "outside-1", "outside-2", "outside-3", "outside-4"],
+                    "win",
+                    1,
+                ),
+                game(
+                    "duo-context",
+                    &["A", "B", "outside-1", "outside-2", "outside-3"],
+                    "win",
+                    2,
+                ),
+                game("stack-context", &["A", "B", "C", "D", "E"], "win", 3),
+            ],
+        )]);
+
+        let observations = build_team_observations_with_configured(
+            queue.len(),
+            &queue,
+            &configured_steam_ids,
+            &histories,
+        );
+        let weights: HashMap<_, _> = observations
+            .iter()
+            .map(|observation| (observation.match_id.as_str(), observation.weight))
+            .collect();
+
+        assert_eq!(weights.get("solo-context"), Some(&5));
+        assert_eq!(weights.get("duo-context"), Some(&4));
+        assert_eq!(weights.get("stack-context"), Some(&1));
+
+        let duo = observations
+            .iter()
+            .find(|observation| observation.match_id == "duo-context")
+            .unwrap();
+        assert_eq!(duo.current_overlap, 1);
+        assert_eq!(duo.historical_configured_count, 2);
+        assert_eq!(duo.configured_outside_count, 1);
+        assert_eq!(duo.unconfigured_count, 3);
+    }
+
+    #[test]
+    fn observation_weight_combines_overlap_and_context_score() {
+        assert_eq!(observation_weight(1, 1, 1), 5);
+        assert_eq!(observation_weight(1, 1, 2), 4);
+        assert_eq!(observation_weight(1, 1, 5), 1);
+        assert_eq!(observation_weight(2, 2, 2), 10);
+        assert_eq!(observation_weight(2, 1, 1), 4);
+        assert_eq!(observation_weight(3, 3, 3), 15);
+        assert_eq!(observation_weight(3, 2, 3), 10);
+        assert_eq!(observation_weight(3, 3, 5), 9);
+        assert_eq!(observation_weight(3, 2, 2), 8);
+        assert_eq!(observation_weight(5, 5, 5), 25);
+        assert_eq!(observation_weight(5, 4, 5), 20);
+        assert_eq!(observation_weight(5, 3, 3), 9);
+    }
+
+    #[test]
+    fn prediction_three_player_queue_uses_overlap_and_context_weights() {
         let queue = vec![steam_id("A"), steam_id("B"), steam_id("C")];
         let histories = histories(vec![(
             "A",
             vec![
-                game("three", &["A", "B", "C"], "win", 1),
-                game("two", &["A", "B"], "win", 2),
-                game("one", &["A"], "win", 3),
+                game(
+                    "three",
+                    &["A", "B", "C", "outside-1", "outside-2"],
+                    "win",
+                    1,
+                ),
+                game(
+                    "two",
+                    &["A", "B", "outside-1", "outside-2", "outside-3"],
+                    "win",
+                    2,
+                ),
+                game(
+                    "one",
+                    &["A", "outside-1", "outside-2", "outside-3", "outside-4"],
+                    "win",
+                    3,
+                ),
             ],
         )]);
 
@@ -728,20 +895,30 @@ mod tests {
             .iter()
             .map(|observation| (observation.match_id.as_str(), observation.weight))
             .collect();
-        assert_eq!(weights.get("three"), Some(&5));
-        assert_eq!(weights.get("two"), Some(&4));
+        assert_eq!(weights.get("three"), Some(&15));
+        assert_eq!(weights.get("two"), Some(&8));
         assert_eq!(weights.get("one"), Some(&3));
-        assert_win_loss(aggregate_prediction(&observations), 12, 0);
+        assert_win_loss(aggregate_prediction(&observations), 26, 0);
     }
 
     #[test]
-    fn prediction_two_player_queue_uses_weights_five_and_four() {
+    fn prediction_two_player_queue_uses_overlap_and_context_weights() {
         let queue = vec![steam_id("A"), steam_id("B")];
         let histories = histories(vec![(
             "A",
             vec![
-                game("two", &["A", "B"], "win", 1),
-                game("one", &["A"], "win", 2),
+                game(
+                    "two",
+                    &["A", "B", "outside-1", "outside-2", "outside-3"],
+                    "win",
+                    1,
+                ),
+                game(
+                    "one",
+                    &["A", "outside-1", "outside-2", "outside-3", "outside-4"],
+                    "win",
+                    2,
+                ),
             ],
         )]);
 
@@ -750,9 +927,9 @@ mod tests {
             .iter()
             .map(|observation| (observation.match_id.as_str(), observation.weight))
             .collect();
-        assert_eq!(weights.get("two"), Some(&5));
+        assert_eq!(weights.get("two"), Some(&10));
         assert_eq!(weights.get("one"), Some(&4));
-        assert_win_loss(aggregate_prediction(&observations), 9, 0);
+        assert_win_loss(aggregate_prediction(&observations), 14, 0);
     }
 
     #[test]
@@ -766,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn prediction_full_queue_reduces_weight_to_overlap() {
+    fn prediction_full_queue_uses_context_and_overlap_weights() {
         let queue = vec![
             steam_id("A"),
             steam_id("B"),
@@ -778,24 +955,44 @@ mod tests {
             "A",
             vec![
                 game("five", &["A", "B", "C", "D", "E"], "win", 1),
-                game("four", &["A", "B", "C", "D"], "win", 2),
-                game("three", &["A", "B", "C"], "win", 3),
-                game("two", &["A", "B"], "win", 4),
-                game("one", &["A"], "win", 5),
+                game("four", &["A", "B", "C", "D", "F"], "win", 2),
+                game(
+                    "three",
+                    &["A", "B", "C", "outside-1", "outside-2"],
+                    "win",
+                    3,
+                ),
+                game(
+                    "two",
+                    &["A", "B", "outside-1", "outside-2", "outside-3"],
+                    "win",
+                    4,
+                ),
+                game(
+                    "one",
+                    &["A", "outside-1", "outside-2", "outside-3", "outside-4"],
+                    "win",
+                    5,
+                ),
             ],
         )]);
 
-        let observations = build_team_observations(&queue, &histories);
+        let observations = build_team_observations_with_configured(
+            queue.len(),
+            &queue,
+            &configured(&["A", "B", "C", "D", "E", "F"]),
+            &histories,
+        );
         let weights: HashMap<_, _> = observations
             .iter()
             .map(|observation| (observation.match_id.as_str(), observation.weight))
             .collect();
-        assert_eq!(weights.get("five"), Some(&5));
-        assert_eq!(weights.get("four"), Some(&4));
-        assert_eq!(weights.get("three"), Some(&3));
-        assert_eq!(weights.get("two"), Some(&2));
+        assert_eq!(weights.get("five"), Some(&25));
+        assert_eq!(weights.get("four"), Some(&20));
+        assert_eq!(weights.get("three"), Some(&9));
+        assert_eq!(weights.get("two"), Some(&4));
         assert_eq!(weights.get("one"), Some(&1));
-        assert_win_loss(aggregate_prediction(&observations), 15, 0);
+        assert_win_loss(aggregate_prediction(&observations), 59, 0);
     }
 
     #[test]
@@ -818,9 +1015,9 @@ mod tests {
 
         let observations = build_team_observations(&queue, &histories);
         assert_eq!(observations.len(), 1);
-        assert_eq!(observations[0].overlap, 3);
-        assert_eq!(observations[0].weight, 5);
-        assert_win_loss(aggregate_prediction(&observations), 5, 0);
+        assert_eq!(observations[0].current_overlap, 3);
+        assert_eq!(observations[0].weight, 15);
+        assert_win_loss(aggregate_prediction(&observations), 15, 0);
     }
 
     #[test]
@@ -832,9 +1029,37 @@ mod tests {
         )]);
 
         let observations = build_team_observations(&queue, &histories);
-        assert_eq!(observations[0].overlap, 2);
-        assert_eq!(observations[0].weight, 4);
-        assert_win_loss(aggregate_prediction(&observations), 4, 0);
+        assert_eq!(observations[0].current_overlap, 2);
+        assert_eq!(observations[0].weight, 8);
+        assert_win_loss(aggregate_prediction(&observations), 8, 0);
+    }
+
+    #[test]
+    fn prediction_configured_outside_teammate_changes_context_without_overlap() {
+        let queue = vec![steam_id("A"), steam_id("B"), steam_id("C")];
+        let configured_steam_ids = configured(&["A", "B", "C", "D"]);
+        let histories = histories(vec![(
+            "A",
+            vec![game(
+                "configured-outside",
+                &["A", "B", "D", "outside-1", "outside-2"],
+                "win",
+                1,
+            )],
+        )]);
+
+        let observations = build_team_observations_with_configured(
+            queue.len(),
+            &queue,
+            &configured_steam_ids,
+            &histories,
+        );
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].current_overlap, 2);
+        assert_eq!(observations[0].historical_configured_count, 3);
+        assert_eq!(observations[0].configured_outside_count, 1);
+        assert_eq!(observations[0].unconfigured_count, 2);
+        assert_eq!(observations[0].weight, 10);
     }
 
     #[test]
@@ -853,7 +1078,7 @@ mod tests {
         ]);
 
         let stats = prediction_stats(&queue, &histories);
-        assert_win_loss(stats, 4, 3);
+        assert_win_loss(stats, 8, 3);
         assert_observed_results(prediction_stats(&queue, &histories), 1, 1, 0);
     }
 
@@ -886,9 +1111,12 @@ mod tests {
             .iter()
             .find(|observation| observation.result == PredictionResult::Win)
             .expect("winning side should be present");
-        assert_eq!(winning_side.overlap, 2);
-        assert_eq!(winning_side.weight, 4);
-        assert_win_loss(aggregate_prediction(&observations), 4, 3);
+        assert_eq!(winning_side.current_overlap, 2);
+        assert_eq!(winning_side.historical_configured_count, 2);
+        assert_eq!(winning_side.configured_outside_count, 0);
+        assert_eq!(winning_side.unconfigured_count, 1);
+        assert_eq!(winning_side.weight, 8);
+        assert_win_loss(aggregate_prediction(&observations), 8, 3);
     }
 
     #[test]
@@ -901,7 +1129,8 @@ mod tests {
 
         let observations = build_team_observations(&queue, &histories);
         assert_eq!(observations.len(), 1);
-        assert_win_loss(aggregate_prediction(&observations), 5, 0);
+        assert_eq!(observations[0].weight, 10);
+        assert_win_loss(aggregate_prediction(&observations), 10, 0);
     }
 
     #[test]
@@ -946,9 +1175,9 @@ mod tests {
             .iter()
             .find(|observation| observation.match_id == "shared-old")
             .expect("A's selected history should introduce the shared match");
-        assert_eq!(shared.overlap, 2);
-        assert_eq!(shared.weight, 5);
-        assert_win_loss(aggregate_prediction(&observations), 5, 0);
+        assert_eq!(shared.current_overlap, 2);
+        assert_eq!(shared.weight, 10);
+        assert_win_loss(aggregate_prediction(&observations), 10, 0);
     }
 
     #[test]
@@ -1013,9 +1242,9 @@ mod tests {
         let histories = histories(vec![("A", vec![game("teammate", &["A", "B"], "win", 1)])]);
 
         let observations = build_team_observations(&queue, &histories);
-        assert_eq!(observations[0].overlap, 2);
-        assert_eq!(observations[0].weight, 5);
-        assert_win_loss(aggregate_prediction(&observations), 5, 0);
+        assert_eq!(observations[0].current_overlap, 2);
+        assert_eq!(observations[0].weight, 10);
+        assert_win_loss(aggregate_prediction(&observations), 10, 0);
     }
 
     #[test]
@@ -1062,5 +1291,56 @@ mod tests {
         let observations = build_team_observations(&queue, &histories);
         assert!(observations.is_empty());
         assert!(aggregate_prediction(&observations).is_none());
+    }
+
+    #[test]
+    fn prediction_prefers_a_more_complete_compatible_duplicate_roster() {
+        let queue = vec![steam_id("A"), steam_id("B")];
+        let configured_steam_ids = configured(&["A", "B"]);
+        let histories = histories(vec![(
+            "A",
+            vec![
+                game("partial", &["A", "B"], "win", 1),
+                game(
+                    "partial",
+                    &["A", "B", "outside-1", "outside-2", "outside-3"],
+                    "win",
+                    1,
+                ),
+            ],
+        )]);
+
+        let observations = build_team_observations_with_configured(
+            queue.len(),
+            &queue,
+            &configured_steam_ids,
+            &histories,
+        );
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].historical_roster.len(), 5);
+        assert_eq!(observations[0].historical_configured_count, 2);
+        assert_eq!(observations[0].unconfigured_count, 3);
+        assert_eq!(observations[0].weight, 10);
+    }
+
+    #[test]
+    fn prediction_rejects_conflicting_duplicate_rosters() {
+        let queue = vec![steam_id("A")];
+        let configured_steam_ids = configured(&["A", "B", "C"]);
+        let histories = histories(vec![(
+            "A",
+            vec![
+                game("roster-conflict", &["A", "B", "outside-1"], "win", 1),
+                game("roster-conflict", &["A", "C", "outside-1"], "win", 1),
+            ],
+        )]);
+
+        let observations = build_team_observations_with_configured(
+            queue.len(),
+            &queue,
+            &configured_steam_ids,
+            &histories,
+        );
+        assert!(observations.is_empty());
     }
 }
