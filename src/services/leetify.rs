@@ -101,7 +101,7 @@ impl LeetifyClient {
             .query(&[("steam64_id", steam_id.to_string())]);
 
         if let Some(api_key) = &self.api_key {
-            request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
+            request = request.header("_leetify_key", api_key);
         }
 
         Ok(request.send().await?.error_for_status()?.json().await?)
@@ -122,7 +122,7 @@ impl LeetifyClient {
         let mut request = self.client.get(&url);
 
         if let Some(api_key) = &self.api_key {
-            request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"));
+            request = request.header("_leetify_key", api_key);
         }
 
         Ok(request.send().await?)
