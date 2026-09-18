@@ -208,7 +208,7 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     };
 
     format!(
-        "{results}\n<b>{wins}W / {losses}L / {ties}T</b> · <b>{win_percentage:.0}% win rate</b>"
+        "<pre>{results}</pre>\n<b>{wins}W / {losses}L / {ties}T</b> · <b>{win_percentage:.0}% win rate</b>"
     )
 }
 
@@ -324,7 +324,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "W L W T\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
+            "<pre>W L W T</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
         );
     }
 
@@ -334,7 +334,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "T\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
+            "<pre>T</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
         );
     }
 
@@ -358,7 +358,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "W L T W L W L W L W\nW W W W W W W W W W\nW W W W W W W W W W\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
+            "<pre>W L T W L W L W L W\nW W W W W W W W W W\nW W W W W W W W W W</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
         );
     }
 }
