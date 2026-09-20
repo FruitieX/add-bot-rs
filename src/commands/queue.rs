@@ -83,6 +83,7 @@ fn make_queue_strings(queues: Vec<(QueueId, Queue)>) -> Vec<String> {
 }
 
 pub async fn add_remove(
+    settings: &Settings,
     username: Username,
     state: State,
     chat_id: ChatId,
@@ -116,41 +117,113 @@ pub async fn add_remove(
         }
     };
 
+    let previous_queue = state
+        .chats
+        .get(&chat_id)
+        .and_then(|chat| chat.queues.get(&queue_id))
+        .cloned()
+        .unwrap_or_else(|| Queue::new(timeout, add_cmd.clone()));
+
     // Add player and update state.
     let (state, result, op) =
         state.add_remove_player(&chat_id, &queue_id, add_cmd, timeout, username);
-    sc.write(state.clone()).await;
+    let new_queue = match &result {
+        AddRemovePlayerResult::QueueFull(queue)
+        | AddRemovePlayerResult::PlayerQueued(queue)
+        | AddRemovePlayerResult::QueueEmpty(queue) => queue.clone(),
+    };
+    let queue_states = vec![
+        (queue_id.clone(), previous_queue),
+        (queue_id.clone(), new_queue.clone()),
+    ];
+    sc.write(state).await;
+
+    let queue_predictions = predict_queue_states(
+        settings,
+        &queue_states,
+        services::leetify::RECENT_MATCHES_LIMIT,
+    )
+    .await;
+    let predicted_winrate = format_predicted_winrate_transition(
+        queue_predictions[0].predicted_winrate(),
+        queue_predictions[1].predicted_winrate(),
+    );
 
     // Construct message based on whether the queue is now full or not.
     match result {
         AddRemovePlayerResult::QueueFull(queue) if queue_id.is_instant_queue() => {
             let players_str = mk_players_str(&queue, true, false);
-            format!("Match ready in {} queue! {}", queue_id, players_str)
+            let predicted_winrate = predicted_winrate
+                .map(|value| format!("\n{value}"))
+                .unwrap_or_default();
+            format!(
+                "Match ready in {} queue! {}{}",
+                queue_id, players_str, predicted_winrate
+            )
         }
         AddRemovePlayerResult::PlayerQueued(queue)
         | AddRemovePlayerResult::QueueFull(queue)
-        | AddRemovePlayerResult::QueueEmpty(queue) => mk_queue_status_msg(&queue, &queue_id, &op),
+        | AddRemovePlayerResult::QueueEmpty(queue) => {
+            mk_queue_status_msg(&queue, &queue_id, &op, predicted_winrate.as_deref())
+        }
     }
 }
 
 pub async fn remove_all(
+    settings: &Settings,
     username: Username,
     state: State,
     chat_id: ChatId,
     sc: &StateContainer,
 ) -> String {
+    let previous_state = state.clone();
+
     // Remove player and update state.
     let (state, affected_queues) = state.rm_player(&chat_id, &username);
-    sc.write(state.clone()).await;
+    let transitions = affected_queues
+        .iter()
+        .filter_map(|(queue_id, new_queue)| {
+            previous_state
+                .chats
+                .get(&chat_id)
+                .and_then(|chat| chat.queues.get(queue_id))
+                .cloned()
+                .map(|previous_queue| (queue_id.clone(), previous_queue, new_queue.clone()))
+        })
+        .collect::<Vec<_>>();
+    let queue_states = transitions
+        .iter()
+        .flat_map(|(queue_id, previous_queue, new_queue)| {
+            [
+                (queue_id.clone(), previous_queue.clone()),
+                (queue_id.clone(), new_queue.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    sc.write(state).await;
+
+    let queue_predictions = predict_queue_states(
+        settings,
+        &queue_states,
+        services::leetify::RECENT_MATCHES_LIMIT,
+    )
+    .await;
 
     // Send queue status message for all affected queues.
-    affected_queues
+    transitions
         .iter()
-        .map(|(queue_id, queue)| {
+        .enumerate()
+        .map(|(index, (queue_id, _, queue))| {
+            let prediction_index = index * 2;
+            let predicted_winrate = format_predicted_winrate_transition(
+                queue_predictions[prediction_index].predicted_winrate(),
+                queue_predictions[prediction_index + 1].predicted_winrate(),
+            );
             mk_queue_status_msg(
                 queue,
                 queue_id,
                 &AddRemovePlayerOp::PlayerRemoved(username.clone()),
+                predicted_winrate.as_deref(),
             )
         })
         .collect::<Vec<String>>()
@@ -601,6 +674,28 @@ fn has_failed_hydration(
         .any(|match_id| failed_match_ids.contains(match_id))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueuePrediction {
+    available_histories: usize,
+    stats: Option<PredictionStats>,
+}
+
+impl QueuePrediction {
+    fn predicted_winrate(self) -> Option<u8> {
+        self.stats
+            .map(|stats| win_percentage(stats.wins, stats.losses).round() as u8)
+    }
+}
+
+fn format_predicted_winrate_transition(previous: Option<u8>, new: Option<u8>) -> Option<String> {
+    match (previous, new) {
+        (Some(previous), Some(new)) => Some(format!("Predicted winrate: {previous}% → {new}%")),
+        (None, Some(new)) => Some(format!("Predicted winrate: unavailable → {new}%")),
+        (Some(previous), None) => Some(format!("Predicted winrate: {previous}% → unavailable")),
+        (None, None) => None,
+    }
+}
+
 fn win_percentage(wins: usize, losses: usize) -> f32 {
     if wins + losses == 0 {
         0.0
@@ -685,6 +780,109 @@ pub(crate) fn queue_start_at(
     }
 }
 
+async fn predict_queue_states(
+    settings: &Settings,
+    queues: &[(QueueId, Queue)],
+    match_count: usize,
+) -> Vec<QueuePrediction> {
+    if queues.is_empty() {
+        return Vec::new();
+    }
+
+    let usernames: HashSet<Username> = queues
+        .iter()
+        .flat_map(|(_, queue)| queue.get_players().0)
+        .collect();
+    let player_steam_ids: HashMap<Username, SteamID> = usernames
+        .iter()
+        .filter_map(|username| {
+            settings
+                .players
+                .steamid_mappings
+                .get(username)
+                .cloned()
+                .map(|steam_id| (username.clone(), steam_id))
+        })
+        .collect();
+    for username in usernames
+        .iter()
+        .filter(|username| !player_steam_ids.contains_key(*username))
+    {
+        eprintln!("No SteamID configured for prediction player {username}");
+    }
+
+    let histories =
+        fetch_prediction_histories(settings, player_steam_ids.values().cloned().collect()).await;
+    let configured_steam_ids = settings
+        .players
+        .steamid_mappings
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    let queue_prediction_inputs = queues
+        .iter()
+        .map(|(_, queue)| {
+            let queue_steam_ids = queue
+                .get_players()
+                .0
+                .iter()
+                .filter_map(|username| player_steam_ids.get(username).cloned())
+                .collect::<Vec<_>>();
+            let candidate_match_ids =
+                select_candidate_match_ids(&queue_steam_ids, &histories, match_count);
+            (queue_steam_ids, candidate_match_ids)
+        })
+        .collect::<Vec<_>>();
+    let candidate_match_ids = queue_prediction_inputs
+        .iter()
+        .flat_map(|(_, match_ids)| match_ids.iter().cloned())
+        .collect::<HashSet<_>>();
+    let hydration = services::leetify::get_leetify_matches(settings, candidate_match_ids).await;
+
+    queues
+        .iter()
+        .zip(queue_prediction_inputs.iter())
+        .map(
+            |((queue_id, queue), (queue_steam_ids, candidate_match_ids))| {
+                let players = queue.get_players().0;
+                let observations = build_team_observations_from_matches(
+                    players.len(),
+                    queue_steam_ids,
+                    &configured_steam_ids,
+                    candidate_match_ids,
+                    &hydration.matches,
+                );
+                let available_histories = players
+                    .iter()
+                    .filter(|username| {
+                        player_steam_ids
+                            .get(*username)
+                            .is_some_and(|steam_id| histories.contains_key(steam_id))
+                    })
+                    .count();
+
+                let stats = if has_failed_hydration(
+                    candidate_match_ids,
+                    &hydration.failed_match_ids,
+                ) {
+                    eprintln!(
+                        "Prediction for queue {queue_id} unavailable because match hydration was incomplete"
+                    );
+                    None
+                } else {
+                    aggregate_prediction(&observations)
+                };
+
+                QueuePrediction {
+                    available_histories,
+                    stats,
+                }
+            },
+        )
+        .collect()
+}
+
 pub async fn predictions(
     settings: &Settings,
     state: State,
@@ -719,100 +917,20 @@ pub async fn predictions(
         }
     });
 
-    let usernames: HashSet<Username> = queues
-        .iter()
-        .flat_map(|(_, queue)| queue.get_players().0)
-        .collect();
-    let player_steam_ids: HashMap<Username, SteamID> = usernames
-        .iter()
-        .filter_map(|username| {
-            settings
-                .players
-                .steamid_mappings
-                .get(username)
-                .cloned()
-                .map(|steam_id| (username.clone(), steam_id))
-        })
-        .collect();
-    for username in usernames
-        .iter()
-        .filter(|username| !player_steam_ids.contains_key(*username))
-    {
-        eprintln!("No SteamID configured for prediction player {username}");
-    }
-
-    let steam_ids = player_steam_ids.values().cloned().collect();
-    let histories = fetch_prediction_histories(settings, steam_ids).await;
-    let configured_steam_ids = settings
-        .players
-        .steamid_mappings
-        .values()
-        .cloned()
-        .collect::<HashSet<_>>();
-
-    let queue_prediction_inputs = queues
-        .iter()
-        .map(|(_, queue)| {
-            let queue_steam_ids = queue
-                .get_players()
-                .0
-                .iter()
-                .filter_map(|username| player_steam_ids.get(username).cloned())
-                .collect::<Vec<_>>();
-            let candidate_match_ids =
-                select_candidate_match_ids(&queue_steam_ids, &histories, match_count);
-            (queue_steam_ids, candidate_match_ids)
-        })
-        .collect::<Vec<_>>();
-    let candidate_match_ids = queue_prediction_inputs
-        .iter()
-        .flat_map(|(_, match_ids)| match_ids.iter().cloned())
-        .collect::<HashSet<_>>();
-    let hydration = services::leetify::get_leetify_matches(settings, candidate_match_ids).await;
-
+    let queue_predictions = predict_queue_states(settings, &queues, match_count).await;
     let queue_lines = queues
         .iter()
-        .zip(queue_prediction_inputs.iter())
-        .map(
-            |((queue_id, queue), (queue_steam_ids, candidate_match_ids))| {
-                let players = queue.get_players().0;
-                let observations = build_team_observations_from_matches(
-                    players.len(),
-                    queue_steam_ids,
-                    &configured_steam_ids,
-                    candidate_match_ids,
-                    &hydration.matches,
-                );
-                let available_histories = players
-                    .iter()
-                    .filter(|username| {
-                        player_steam_ids
-                            .get(*username)
-                            .is_some_and(|steam_id| histories.contains_key(steam_id))
-                    })
-                    .count();
-
-                let stats = if has_failed_hydration(
-                    candidate_match_ids,
-                    &hydration.failed_match_ids,
-                ) {
-                    eprintln!(
-                        "Prediction for queue {queue_id} unavailable because match hydration was incomplete"
-                    );
-                    None
-                } else {
-                    aggregate_prediction(&observations)
-                };
-
-                format_prediction_line(
-                    queue_id,
-                    queue.size(),
-                    players.len(),
-                    available_histories,
-                    stats,
-                )
-            },
-        )
+        .zip(queue_predictions.iter())
+        .map(|((queue_id, queue), prediction)| {
+            let players = queue.get_players().0;
+            format_prediction_line(
+                queue_id,
+                queue.size(),
+                players.len(),
+                prediction.available_histories,
+                prediction.stats,
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -826,6 +944,27 @@ pub async fn predictions(
 mod tests {
     use super::*;
     use chrono::{Duration, TimeZone};
+
+    #[test]
+    fn predicted_winrate_transition_formats_previous_and_new_rates() {
+        assert_eq!(
+            format_predicted_winrate_transition(Some(54), Some(48)),
+            Some("Predicted winrate: 54% → 48%".to_string())
+        );
+    }
+
+    #[test]
+    fn predicted_winrate_transition_labels_unavailable_side() {
+        assert_eq!(
+            format_predicted_winrate_transition(None, Some(48)),
+            Some("Predicted winrate: unavailable → 48%".to_string())
+        );
+        assert_eq!(
+            format_predicted_winrate_transition(Some(54), None),
+            Some("Predicted winrate: 54% → unavailable".to_string())
+        );
+        assert_eq!(format_predicted_winrate_transition(None, None), None);
+    }
 
     fn steam_id(id: &str) -> SteamID {
         SteamID::new(id.to_string())

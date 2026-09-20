@@ -65,12 +65,20 @@ pub async fn send_photo(bot: &Bot, chat_id: &ChatId, photo: InputFile) {
 }
 
 /// Constructs a status message describing current queue status.
-pub fn mk_queue_status_msg(queue: &Queue, queue_id: &QueueId, op: &AddRemovePlayerOp) -> String {
+pub fn mk_queue_status_msg(
+    queue: &Queue,
+    queue_id: &QueueId,
+    op: &AddRemovePlayerOp,
+    predicted_winrate: Option<&str>,
+) -> String {
     let players_str = mk_players_str(queue, false, false);
+    let predicted_winrate = predicted_winrate
+        .map(|value| format!("\n{value}"))
+        .unwrap_or_default();
 
     format!(
-        "{} queue: {}.\n{}.\nUse {} to add/remove yourself from the queue!",
-        queue_id, op, players_str, queue.add_cmd,
+        "{} queue: {}.\n{}.{}\nUse {} to add/remove yourself from the queue!",
+        queue_id, op, players_str, predicted_winrate, queue.add_cmd,
     )
 }
 
@@ -112,5 +120,32 @@ pub fn mk_players_str(queue: &Queue, highlight: bool, short: bool) -> String {
         )
     } else {
         format!("{}{} ({})", title, player_count, players)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveTime;
+
+    #[test]
+    fn queue_status_uses_dense_predicted_winrate_transition() {
+        let mut queue = Queue::new(
+            NaiveTime::from_hms_opt(20, 45, 0).unwrap(),
+            "/2045".to_string(),
+        );
+        queue.insert_player(Username::new("Machofantastic".to_string()));
+
+        let message = mk_queue_status_msg(
+            &queue,
+            &QueueId::new("20:45".to_string()),
+            &AddRemovePlayerOp::PlayerAdded(Username::new("Machofantastic".to_string())),
+            Some("Predicted winrate: 54% → 48%"),
+        );
+
+        assert_eq!(
+            message,
+            "20:45 queue: Added Machofantastic.\nPlayers: 1/5 (Machofantastic).\nPredicted winrate: 54% → 48%\nUse /2045 to add/remove yourself from the queue!"
+        );
     }
 }

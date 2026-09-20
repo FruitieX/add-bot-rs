@@ -37,11 +37,11 @@ pub async fn handle_cmd(
         Command::Help => Command::help(),
         Command::AddRemove { time, for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
-            add_remove(username, state, chat_id, &tz, time, &sc).await
+            add_remove(&settings, username, state, chat_id, &tz, time, &sc).await
         }
         Command::RemoveAll => {
             let username = mk_username(&user);
-            remove_all(username, state, chat_id, &sc).await
+            remove_all(&settings, username, state, chat_id, &sc).await
         }
         Command::List => list(state, chat_id, &tz),
         Command::Predictions { match_count } => {
