@@ -304,65 +304,6 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::services::leetify::{MatchResult, RecentMatch};
-
-    fn result(result: MatchResult) -> RecentMatch {
-        RecentMatch { result }
-    }
-
-    #[test]
-    fn recent_results_include_win_loss_counts_and_percentage() {
-        let results = vec![
-            result(MatchResult::Win),
-            result(MatchResult::Loss),
-            result(MatchResult::Win),
-            result(MatchResult::Tie),
-        ];
-
-        assert_eq!(
-            format_recent_results(&results),
-            "<pre>W L W T</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
-        );
-    }
-
-    #[test]
-    fn ties_do_not_make_an_all_tie_result_a_win() {
-        let results = vec![result(MatchResult::Tie)];
-
-        assert_eq!(
-            format_recent_results(&results),
-            "<pre>T</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
-        );
-    }
-
-    #[test]
-    fn only_latest_thirty_results_are_rendered_and_counted() {
-        let mut results = vec![
-            result(MatchResult::Win),
-            result(MatchResult::Loss),
-            result(MatchResult::Tie),
-            result(MatchResult::Win),
-            result(MatchResult::Loss),
-            result(MatchResult::Win),
-            result(MatchResult::Loss),
-            result(MatchResult::Win),
-            result(MatchResult::Loss),
-            result(MatchResult::Win),
-        ];
-        results.extend((0..35).map(|_| result(MatchResult::Win)));
-        results.extend((0..51).map(|_| result(MatchResult::Loss)));
-        results.extend((0..4).map(|_| result(MatchResult::Tie)));
-
-        assert_eq!(
-            format_recent_results(&results),
-            "<pre>W L T W L W L W L W\nW W W W W W W W W W\nW W W W W W W W W W</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
-        );
-    }
-}
-
 fn stat_type_display_name(stat_type: &str) -> String {
     match stat_type {
         "aim" => "Aim".to_string(),
@@ -470,5 +411,64 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> String {
             eprintln!("Failed to fetch team flash leaderboard from Leetify: {}", e);
             "Failed to fetch team flash leaderboard from Leetify".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::leetify::{MatchResult, RecentMatch};
+
+    fn result(result: MatchResult) -> RecentMatch {
+        RecentMatch { result }
+    }
+
+    #[test]
+    fn recent_results_include_win_loss_counts_and_percentage() {
+        let results = vec![
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+            result(MatchResult::Tie),
+        ];
+
+        assert_eq!(
+            format_recent_results(&results),
+            "<pre>W L W T</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
+        );
+    }
+
+    #[test]
+    fn ties_do_not_make_an_all_tie_result_a_win() {
+        let results = vec![result(MatchResult::Tie)];
+
+        assert_eq!(
+            format_recent_results(&results),
+            "<pre>T</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
+        );
+    }
+
+    #[test]
+    fn only_latest_thirty_results_are_rendered_and_counted() {
+        let mut results = vec![
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Tie),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Win),
+        ];
+        results.extend((0..35).map(|_| result(MatchResult::Win)));
+        results.extend((0..51).map(|_| result(MatchResult::Loss)));
+        results.extend((0..4).map(|_| result(MatchResult::Tie)));
+
+        assert_eq!(
+            format_recent_results(&results),
+            "<pre>W L T W L W L W L W\nW W W W W W W W W W\nW W W W W W W W W W</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
+        );
     }
 }
