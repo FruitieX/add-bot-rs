@@ -690,7 +690,7 @@ impl QueuePrediction {
 fn format_predicted_winrate_transition(previous: Option<u8>, new: Option<u8>) -> Option<String> {
     match (previous, new) {
         (Some(previous), Some(new)) => Some(format!("Predicted winrate: {previous}% → {new}%")),
-        (None, Some(new)) => Some(format!("Predicted winrate: unavailable → {new}%")),
+        (None, Some(new)) => Some(format!("Predicted winrate: {new}%")),
         (Some(previous), None) => Some(format!("Predicted winrate: {previous}% → unavailable")),
         (None, None) => None,
     }
@@ -957,7 +957,7 @@ mod tests {
     fn predicted_winrate_transition_labels_unavailable_side() {
         assert_eq!(
             format_predicted_winrate_transition(None, Some(48)),
-            Some("Predicted winrate: unavailable → 48%".to_string())
+            Some("Predicted winrate: 48%".to_string())
         );
         assert_eq!(
             format_predicted_winrate_transition(Some(54), None),
