@@ -691,7 +691,7 @@ fn format_predicted_winrate_transition(previous: Option<u8>, new: Option<u8>) ->
     match (previous, new) {
         (Some(previous), Some(new)) => Some(format!("Predicted winrate: {previous}% → {new}%")),
         (None, Some(new)) => Some(format!("Predicted winrate: {new}%")),
-        (Some(previous), None) => Some(format!("Predicted winrate: {previous}% → unavailable")),
+        (Some(_), None) => None,
         (None, None) => None,
     }
 }
@@ -954,15 +954,12 @@ mod tests {
     }
 
     #[test]
-    fn predicted_winrate_transition_labels_unavailable_side() {
+    fn predicted_winrate_transition_omits_unavailable_new_rate() {
         assert_eq!(
             format_predicted_winrate_transition(None, Some(48)),
             Some("Predicted winrate: 48%".to_string())
         );
-        assert_eq!(
-            format_predicted_winrate_transition(Some(54), None),
-            Some("Predicted winrate: 54% → unavailable".to_string())
-        );
+        assert_eq!(format_predicted_winrate_transition(Some(54), None), None);
         assert_eq!(format_predicted_winrate_transition(None, None), None);
     }
 
