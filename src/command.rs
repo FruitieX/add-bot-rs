@@ -28,7 +28,8 @@ The following commands are supported:
 - /clutch       Leaderboard by clutch rating.
 - /teamflash    Flashbangs thrown and teammates flashed per round.
 - /flashes      Flashbangs thrown and teammates flashed per round.
-- /activity     Daily games played by all players (last 365 days).
+- /activity     Daily games played by all players (last 90 days).
+- /results      Daily wins, losses, and ties for configured players (last 90 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
 ```Most commands accept an optional `@username` argument, which defaults to yourself."
@@ -82,6 +83,11 @@ pub enum Command {
 
     /// Daily games played chart for last 365 days (optionally filter by @username)
     Activity {
+        for_user: Option<Username>,
+    },
+
+    /// Daily wins, losses, and ties chart for last 90 days (optionally filter by @username)
+    Results {
         for_user: Option<Username>,
     },
 
@@ -246,6 +252,11 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "activity" | "games" | "played" | "daily" => {
                 let for_user = args.and_then(parse_username_arg);
                 Some(Command::Activity { for_user })
+            }
+
+            "results" => {
+                let for_user = args.and_then(parse_username_arg);
+                Some(Command::Results { for_user })
             }
 
             "wingman" => Some(Command::HallOfFame {

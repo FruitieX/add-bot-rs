@@ -3,6 +3,7 @@ use crate::{
     commands::{
         activity::get_activity_inputfile,
         queue::{add_remove, list, predictions, remove_all},
+        results::get_results_inputfile,
         sahko::{get_sahko_inputfile, queue_cost_message},
         stats::{
             hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats,
@@ -79,6 +80,18 @@ pub async fn handle_cmd(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch activity chart: {}", e);
+                    return None;
+                }
+            };
+
+            send_photo(&bot, &chat_id, photo).await;
+            return Some(());
+        }
+        Command::Results { for_user } => {
+            let photo = match get_results_inputfile(&settings, for_user.as_ref()).await {
+                Ok(photo) => photo,
+                Err(e) => {
+                    eprintln!("Failed to fetch results chart: {}", e);
                     return None;
                 }
             };
