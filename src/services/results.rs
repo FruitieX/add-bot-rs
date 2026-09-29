@@ -119,8 +119,8 @@ pub async fn get_results_chart(
         root.fill(&WHITE)?;
 
         let caption = match filter_user {
-            Some(user) => format!("Match results for {user} (last {DAYS_SHOWN} days)"),
-            None => format!("Match results (last {DAYS_SHOWN} days)"),
+            Some(user) => format!("{user} — wins, losses & ties (last {DAYS_SHOWN} days)"),
+            None => format!("Configured players — wins, losses & ties (last {DAYS_SHOWN} days)"),
         };
         let mut chart = ChartBuilder::on(&root)
             .set_label_area_size(LabelAreaPosition::Left, 70)
