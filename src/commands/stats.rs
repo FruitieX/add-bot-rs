@@ -195,7 +195,11 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     };
     let results = recent_matches
         .iter()
-        .map(|m| m.result.to_string())
+        .map(|m| match &m.result {
+            services::leetify::MatchResult::Win => "🟩",
+            services::leetify::MatchResult::Loss => "🟥",
+            services::leetify::MatchResult::Tie => "🟨",
+        })
         .collect::<Vec<_>>()
         .chunks(RESULTS_PER_ROW)
         .map(|row| row.join(" "))
@@ -434,7 +438,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "<pre>W L W T</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
+            "<pre>🟩 🟥 🟩 🟨</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
         );
     }
 
@@ -444,7 +448,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "<pre>T</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
+            "<pre>🟨</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
         );
     }
 
@@ -468,7 +472,7 @@ mod tests {
 
         assert_eq!(
             format_recent_results(&results),
-            "<pre>W L T W L W L W L W\nW W W W W W W W W W\nW W W W W W W W W W</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
+            "<pre>🟩 🟥 🟨 🟩 🟥 🟩 🟥 🟩 🟥 🟩\n🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩\n🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
         );
     }
 }
