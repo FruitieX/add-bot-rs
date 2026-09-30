@@ -1,3 +1,4 @@
+use super::failure::DataFailure;
 use super::{
     chart_style::{self, BORDER, INK, MUTED, WIDTH},
     chart_text::ChartBackend,
@@ -16,7 +17,7 @@ use plotters::{
 };
 
 use crate::{
-    services::leetify::{get_leetify_games, LeetifyGame},
+    services::leetify::{collect_player_histories, get_leetify_games_checked, LeetifyGame},
     settings::Settings,
 };
 
@@ -41,44 +42,63 @@ pub async fn get_activity_chart(
     settings: &Settings,
     filter_user: Option<&Username>,
 ) -> Result<Vec<u8>> {
+    if let Some(user) = filter_user {
+        if !settings.players.steamid_mappings.contains_key(user) {
+            return Err(DataFailure::Unlinked(user.clone()).into());
+        }
+    }
+    if settings.players.steamid_mappings.is_empty() {
+        return Err(DataFailure::NoPlayers.into());
+    }
     // Gather games per player in parallel.
     let mappings = settings.players.steamid_mappings.clone();
     let futures: Vec<_> = mappings
         .into_iter()
         .map(|(username, steamid)| {
             let settings = settings.clone();
-            async move { (username, get_leetify_games(&settings, &steamid).await) }
+            async move {
+                (
+                    username,
+                    get_leetify_games_checked(&settings, &steamid).await,
+                )
+            }
         })
         .collect();
     let player_results = futures::future::join_all(futures).await;
 
-    // Keep per-player games (raw) and master list for total aggregation
-    let mut per_player_games: Vec<(String, Vec<LeetifyGame>)> = Vec::new();
-    let mut all_games: Vec<LeetifyGame> = Vec::new();
-    for (username, maybe_stats) in player_results.into_iter() {
-        if let Some(games) = maybe_stats {
-            let un = username.to_string();
-            let include = match filter_user {
-                Some(fu) => *fu == username,
-                None => true,
-            };
-            if include {
-                all_games.extend(games.clone());
-            }
-            per_player_games.push((un, games));
-        }
-    }
-
-    render_activity_chart(per_player_games, all_games, filter_user)
+    let histories = collect_player_histories(player_results, filter_user)?;
+    let all_games = histories
+        .games
+        .iter()
+        .filter(|(name, _)| filter_user.is_none_or(|user| name == &user.to_string()))
+        .flat_map(|(_, games)| games.clone())
+        .collect();
+    let notice = (!histories.unavailable.is_empty()).then(|| {
+        format!(
+            "Partial history · unavailable for: {}",
+            histories.unavailable.join(" · ")
+        )
+    });
+    render_activity_with_notice(histories.games, all_games, filter_user, notice.as_deref())
 }
 
+#[cfg(test)]
 fn render_activity_chart(
     per_player_games: Vec<(String, Vec<LeetifyGame>)>,
     all_games: Vec<LeetifyGame>,
     filter_user: Option<&Username>,
 ) -> Result<Vec<u8>> {
+    render_activity_with_notice(per_player_games, all_games, filter_user, None)
+}
+
+fn render_activity_with_notice(
+    per_player_games: Vec<(String, Vec<LeetifyGame>)>,
+    all_games: Vec<LeetifyGame>,
+    filter_user: Option<&Username>,
+    notice: Option<&str>,
+) -> Result<Vec<u8>> {
     if all_games.is_empty() {
-        return Err(eyre!("No games found for any configured player"));
+        return Err(DataFailure::NoMatches(filter_user.cloned()).into());
     }
 
     let today = Utc::now().date_naive();
@@ -324,6 +344,16 @@ fn render_activity_chart(
             MUTED,
             false,
         )?;
+        if let Some(notice) = notice {
+            chart_style::text(
+                &root,
+                &chart_style::fit_text(notice, 18, 1300),
+                (100, 180),
+                18,
+                MUTED,
+                false,
+            )?;
+        }
         let total = counts.values().sum::<u32>();
         let active_days = counts.values().filter(|count| **count > 0).count();
         let busiest = counts.values().copied().max().unwrap_or(0);
@@ -555,6 +585,17 @@ mod tests {
             render_activity_chart(players, games.clone(), Some(&Username::new("Alice".into())))
                 .unwrap();
         std::fs::write("target/activity-player-preview.png", chart).unwrap();
+        std::fs::write(
+            "target/activity-partial-preview.png",
+            render_activity_with_notice(
+                vec![("Alice".into(), games.clone())],
+                games.clone(),
+                None,
+                Some("Partial history · unavailable for: Bob"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let players = (0..12).map(|index| (format!("Player {index:02} with an exceptionally long display name for layout review"),games.clone())).collect();
         std::fs::write(
             "target/activity-long-names-preview.png",

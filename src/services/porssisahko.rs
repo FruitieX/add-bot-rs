@@ -95,7 +95,9 @@ pub(crate) fn render_price_chart(
 ) -> Result<Vec<u8>> {
     // Preserve the existing three-hour trim, including all remaining 15-minute slots.
     let prices = &prices[if prices.len() > 12 { 12 } else { 0 }..];
-    let first = prices.first().ok_or_else(|| eyre!("No prices found"))?;
+    let first = prices
+        .first()
+        .ok_or(super::failure::DataFailure::NoPrices)?;
     let last = prices.last().unwrap();
     let start = first.start_date.with_timezone(&tz);
     let end = (last.start_date + Duration::minutes(15)).with_timezone(&tz);
@@ -293,7 +295,15 @@ pub(crate) fn render_price_chart(
 pub(crate) async fn get_latest_prices() -> Result<Vec<HourlyPrice>> {
     println!("Fetching latest sahko prices");
     let url = "https://api.porssisahko.net/v2/latest-prices.json";
-    let resp: PricesResult = reqwest::get(url).await?.json().await?;
+    let response = reqwest::get(url)
+        .await
+        .map_err(|error| super::failure::upstream(error.into(), "Electricity price service"))?
+        .error_for_status()
+        .map_err(|error| super::failure::upstream(error.into(), "Electricity price service"))?;
+    let resp: PricesResult = response
+        .json()
+        .await
+        .map_err(|error| super::failure::upstream(error.into(), "Electricity price service"))?;
 
     // In case it is relevant to filter only the recent 24 hours
     // let current_date = Utc::now().with_timezone(&TZ);

@@ -1,3 +1,4 @@
+use super::failure::DataFailure;
 use std::collections::{HashSet, VecDeque};
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
@@ -13,7 +14,7 @@ use crate::{
     services::{
         chart_style::{BORDER, INK, MUTED, WIDTH},
         chart_text::layout_text,
-        leetify::{get_leetify_games, LeetifyGame},
+        leetify::{collect_player_histories, get_leetify_games_checked, LeetifyGame},
     },
     settings::Settings,
     types::Username,
@@ -136,21 +137,36 @@ pub async fn get_results_chart(
         .collect::<Vec<_>>();
     // Shared games are counted once; retain a deterministic player's perspective.
     players.sort_by_key(|(username, _)| username.to_string());
-    let requests = players
-        .into_iter()
-        .map(|(_, steam_id)| get_leetify_games(settings, steam_id));
-    let games = futures::future::join_all(requests)
-        .await
-        .into_iter()
-        .flatten()
-        .flatten()
-        .collect::<Vec<_>>();
-    if games.is_empty() {
-        return Err(eyre!("No games found for the selected players"));
+    if players.is_empty() {
+        return Err(match filter_user {
+            Some(name) => DataFailure::Unlinked(name.clone()),
+            None => DataFailure::NoPlayers,
+        }
+        .into());
     }
-    render_results(
+    let requests = players.into_iter().map(|(name, steam_id)| async move {
+        (
+            name.clone(),
+            get_leetify_games_checked(settings, steam_id).await,
+        )
+    });
+    let histories =
+        collect_player_histories(futures::future::join_all(requests).await, filter_user)?;
+    let games = histories
+        .games
+        .into_iter()
+        .flat_map(|(_, games)| games)
+        .collect();
+    let notice = (!histories.unavailable.is_empty()).then(|| {
+        format!(
+            "Partial history · unavailable for: {}",
+            histories.unavailable.join(" · ")
+        )
+    });
+    render_results_with_notice(
         &collect_results(games, Utc::now().date_naive()),
         filter_user,
+        notice.as_deref(),
     )
 }
 
@@ -207,7 +223,16 @@ fn form_segments(a: FormCoordinate, b: FormCoordinate) -> Vec<(FormCoordinate, F
     }
 }
 
+#[cfg(test)]
 fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<Vec<u8>> {
+    render_results_with_notice(data, filter_user, None)
+}
+
+fn render_results_with_notice(
+    data: &ResultsData,
+    filter_user: Option<&Username>,
+    notice: Option<&str>,
+) -> Result<Vec<u8>> {
     let rows = data.daily.iter().map(Vec::len).max().unwrap_or(0).max(4);
     let legend_y = TILE_TOP + rows as i32 * TILE_STEP + 28;
     let height = (legend_y + 90) as u32;
@@ -231,6 +256,16 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
             MUTED,
             HPos::Left,
         )?;
+        if let Some(notice) = notice {
+            text(
+                &root,
+                &super::chart_style::fit_text(notice, 18, 1300),
+                (100, 180),
+                18,
+                MUTED,
+                HPos::Left,
+            )?;
+        }
         let overall = win_rate(data.totals)
             .map(|rate| format!("{rate:.0}%"))
             .unwrap_or_else(|| "—".into());
@@ -790,7 +825,17 @@ mod tests {
         std::fs::create_dir_all("target").unwrap();
         std::fs::write(
             "target/results-preview.png",
-            render_results(&collect_results(games, today()), None).unwrap(),
+            render_results(&collect_results(games.clone(), today()), None).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            "target/results-partial-preview.png",
+            render_results_with_notice(
+                &collect_results(games, today()),
+                None,
+                Some("Partial history · unavailable for: Alice · Bob"),
+            )
+            .unwrap(),
         )
         .unwrap();
         std::fs::write(

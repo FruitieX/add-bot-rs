@@ -1,3 +1,4 @@
+use super::failure::{self, DataFailure};
 use crate::util::escape_html;
 use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
@@ -10,13 +11,11 @@ use serde::Deserialize;
 /// We require latitude, longitude and display_name to be present when the section exists.
 fn get_weather_config() -> Result<(f64, f64, String)> {
     let settings = crate::settings::read_settings()?;
-    let w = settings
-        .weather
-        .ok_or_else(|| eyre!("Weather not configured"))?;
+    let w = settings.weather.ok_or(DataFailure::WeatherNotConfigured)?;
 
     let name = w.display_name.trim().to_string();
     if name.is_empty() {
-        return Err(eyre!("Weather display_name is empty"));
+        return Err(DataFailure::WeatherNotConfigured.into());
     }
 
     Ok((w.latitude, w.longitude, name))
@@ -366,16 +365,17 @@ pub async fn get_forecast() -> Result<Forecast> {
         .default_headers(build_headers())
         .build()?;
 
-    let res = client.get(url).send().await?;
-    if !res.status().is_success() {
-        return Err(eyre!(
-            "met.no responded with status {}",
-            res.status().as_u16()
-        ));
-    }
-
-    let forecast = res.json::<Forecast>().await?;
-    Ok(forecast)
+    let res = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| failure::upstream(error.into(), "Weather service"))?;
+    let res = res
+        .error_for_status()
+        .map_err(|error| failure::upstream(error.into(), "Weather service"))?;
+    res.json()
+        .await
+        .map_err(|error| failure::upstream(error.into(), "Weather service"))
 }
 
 /// Helper for "/temperature" command
@@ -385,7 +385,7 @@ pub async fn format_temperature_line(tz: Tz) -> Result<String> {
     let now = Utc::now();
 
     let Some(ts) = pick_relevant_series(&forecast.properties.timeseries, now) else {
-        return Err(eyre!("No timeseries data available from met.no"));
+        return Err(DataFailure::NoForecast.into());
     };
 
     let obs = extract_observation(ts);
@@ -435,7 +435,7 @@ fn render_weather_report(
     tz: Tz,
 ) -> Result<String> {
     let ts = pick_relevant_series(&forecast.properties.timeseries, now)
-        .ok_or_else(|| eyre!("No forecast data available"))?;
+        .ok_or(DataFailure::NoForecast)?;
     let obs = extract_observation(ts);
     let gust = obs
         .wind_gust_ms

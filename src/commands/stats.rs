@@ -1,3 +1,4 @@
+use crate::services::failure;
 use chrono::Utc;
 use chrono_tz::Tz;
 
@@ -103,7 +104,12 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
         Ok(leaderboard) => format_hall_of_fame(&leaderboard, &rank_type),
         Err(error) => {
             eprintln!("Failed to fetch ranks from Leetify: {error}");
-            "Failed to fetch stats from Leetify".to_string()
+            let retry = if rank_type == "premier" {
+                "/halloffame".into()
+            } else {
+                format!("/{rank_type}")
+            };
+            failure::message(&error, "Rank leaderboard", &retry)
         }
     }
 }
@@ -179,7 +185,7 @@ pub async fn hall_of_shame(settings: &Settings, tz: &Tz) -> String {
         Ok(leaderboard) => format_hall_of_shame(&leaderboard, Utc::now().with_timezone(tz)),
         Err(error) => {
             eprintln!("Failed to fetch squad history from Leetify: {error}");
-            "Failed to fetch stats from Leetify".to_string()
+            failure::message(&error, "Squad history", "/hallofshame")
         }
     }
 }
@@ -213,8 +219,7 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
         Ok(result) => format_last_played(&result, &username, Utc::now().with_timezone(tz)),
         Err(error) => {
             eprintln!("Failed to fetch last squad match from Leetify: {error}");
-            "Last squad match unavailable: no verified match found or history could not be fetched."
-                .to_string()
+            failure::message(&error, "Last squad match", "/lastplayed")
         }
     }
 }
@@ -448,7 +453,10 @@ pub async fn stats(
                 Ok(teammate_stats) => format_teammate_stats(&teammate_stats),
                 Err(e) => {
                     eprintln!("Failed to fetch teammate stats from Leetify: {}", e);
-                    "<b>Teammates</b>\nTeammate records unavailable.".to_string()
+                    format!(
+                        "<b>Teammates</b>\n{}",
+                        failure::message(&e, "Teammate records", "/stats")
+                    )
                 }
             };
 
@@ -473,7 +481,7 @@ pub async fn stats(
         }
         Err(e) => {
             eprintln!("Failed to fetch player stats from Leetify: {}", e);
-            "Failed to fetch player stats from Leetify".to_string()
+            failure::message(&e, "Stats", "/stats")
         }
     }
 }
@@ -497,7 +505,7 @@ pub async fn recent_form(
         ),
         Err(error) => {
             eprintln!("Failed to fetch recent form from Leetify: {error}");
-            "Failed to fetch recent form from Leetify".to_string()
+            failure::message(&error, "Recent form", "/form")
         }
     }
 }
@@ -569,7 +577,7 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: String) -> String 
         Ok(leaderboard) => format_stat_leaderboard(&leaderboard, &stat_type),
         Err(error) => {
             eprintln!("Failed to fetch stat leaderboard from Leetify: {error}");
-            "Failed to fetch stat leaderboard from Leetify".to_string()
+            failure::message(&error, "Leaderboard", &format!("/{stat_type}"))
         }
     }
 }
@@ -612,7 +620,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> String {
         Ok(leaderboard) => format_team_flash_leaderboard(&leaderboard),
         Err(error) => {
             eprintln!("Failed to fetch team flash leaderboard from Leetify: {error}");
-            "Failed to fetch team flash leaderboard from Leetify".to_string()
+            failure::message(&error, "Team flashes", "/teamflash")
         }
     }
 }

@@ -22,7 +22,7 @@ Use any HHMM time for a timed queue. Predictions use the latest 30 matches;
 <code>/predict 50</code> changes the match count (1–100).
 
 <b>Stats &amp; form</b>
-/lastplayed — Last game stats.
+/lastplayed — Last verified squad match and teammates.
 /stats — Leetify stats and recent form.
 /form — Recent match form.
 /activity — Daily games over the last 90 days.
@@ -32,19 +32,22 @@ Player stats default to yourself; add <code>@username</code> to view another pla
 Activity and results default to all configured players.
 
 <b>Leaderboards</b>
-/halloffame — Top 10 by skill.
-/hallofshame — Ranked by last played date.
+/halloffame — Top 10 Premier ratings.
+/mirage · /nuke · /dust2 · /wingman — Named-rank leaderboards.
+Any /de_map or /cs_map command shows that map’s ranks.
+/hallofshame — Days since the last verified squad match.
 /aim — Aim rating.
 /positioning — Positioning rating.
 /utility — Utility rating.
 /opening — Opening duels.
 /clutch — Clutch rating.
-/teamflash — Team flashes per round (also /flashes).
+/teamflash — Teammate hits and flashes thrown per 100 rounds (also /flashes).
 
 <b>Weather &amp; electricity</b>
 /temperature — Current temperature.
 /weather — Weather forecast.
-/el — Electricity prices and queue cost forecasts.
+/el — Electricity chart with queue costs per PC / estimated match.
+/version — Bot version and deployed commit.
 
 <b>Form themes</b>
 Choose a theme and 5 or 10 results per row:
@@ -121,6 +124,12 @@ pub enum Command {
     /// Display help text for supported commands.
     Help,
 
+    /// Detailed command help.
+    HelpAll,
+
+    /// Version and build commit.
+    Version,
+
     /// Add/remove player from instant queue or timed queue.
     AddRemove {
         time: Option<NaiveTime>,
@@ -193,13 +202,19 @@ pub enum Command {
 
 impl Command {
     pub fn help() -> String {
-        HELP_TEXT.as_str().to_string()
+        "<b>🎮 Queues</b>\n/add · /1930 · /ls · /rm · /predict\n\n<b>📊 Stats &amp; form</b>\n/stats · /form · /lastplayed · /results · /activity\n\n<b>🏆 Rankings &amp; banter</b>\n/halloffame · /hallofshame · /teamflash\n/aim · /positioning · /utility · /opening · /clutch\n\n<b>⚡ Weather &amp; electricity</b>\n/el · /weather · /temperature\n\nStats and form default to yourself; charts default to configured players.\nTry <code>/stats @username moon 5</code>.\n\n/help all — All commands, themes, and examples.\n/version — Bot version and deployed commit.".to_string()
     }
+}
+
+pub fn version() -> String {
+    format!(
+        "add-bot · v{VERSION}\nCommit {}",
+        env!("ADD_BOT_BUILD_COMMIT")
+    )
 }
 
 struct CmdMatches {
     cmd: String,
-    #[allow(dead_code)]
     bot_name: Option<String>,
     args: Option<String>,
 }
@@ -208,7 +223,8 @@ struct CmdMatches {
 fn get_cmd_matches(text: &str) -> Option<CmdMatches> {
     // Construct a regex that matches TG commands
     lazy_static! {
-        static ref RE: Regex = Regex::new(r"^/([^@\s]+)@?(?:(\S+)|)\s?([\s\S]*)$").unwrap();
+        static ref RE: Regex =
+            Regex::new(r"^/([^@\s]+)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$").unwrap();
     }
 
     let caps = RE.captures(text)?;
@@ -264,7 +280,7 @@ fn parse_time_arg(s: &str) -> Result<NaiveTime, chrono::ParseError> {
 fn parse_username_arg(s: String) -> Option<Username> {
     lazy_static! {
         // Construct a regex that matches `@username`.
-        static ref RE: Regex = Regex::new(r"^@(\w{5,32})$").unwrap();
+        static ref RE: Regex = Regex::new(r"^@([A-Za-z0-9_]{5,32})$").unwrap();
     }
 
     let caps = RE.captures(&s)?;
@@ -345,7 +361,13 @@ fn parse_recent_form_args(
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "usage: /stats or /form [@username] [theme or three emoji in win/loss/tie order] [5|10]",
+                if arg.starts_with('@') {
+                    "Use a valid @username.".to_owned()
+                } else if arg.chars().all(|c| c.is_ascii_digit()) {
+                    "Row width must be 5 or 10.".to_owned()
+                } else {
+                    format!("Unknown form style “{arg}”.")
+                },
             )
             .into());
         }
@@ -384,7 +406,11 @@ fn parse_prediction_match_count(
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     const MAX_MATCH_COUNT: usize = 100;
 
-    let match_count = args.as_deref().unwrap_or("30").parse::<usize>()?;
+    let match_count = args
+        .as_deref()
+        .unwrap_or("30")
+        .parse::<usize>()
+        .map_err(|_| argument_error("Match count must be a number from 1 to 100."))?;
     if !(1..=MAX_MATCH_COUNT).contains(&match_count) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -396,6 +422,70 @@ fn parse_prediction_match_count(
     Ok(match_count)
 }
 
+fn argument_error(message: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+}
+
+fn target_arg(args: Option<String>) -> Result<Option<Username>, std::io::Error> {
+    args.map(|arg| {
+        parse_username_arg(arg).ok_or_else(|| argument_error("Use one valid @username."))
+    })
+    .transpose()
+}
+
+pub fn parse_cmd_for_bot(
+    text: &str,
+    bot_name: &str,
+) -> Result<Option<Command>, Box<dyn std::error::Error + Send + Sync>> {
+    if get_cmd_matches(text.trim())
+        .and_then(|cmd| cmd.bot_name)
+        .is_some_and(|name| !name.eq_ignore_ascii_case(bot_name))
+    {
+        return Ok(None);
+    }
+    parse_cmd(text)
+}
+
+pub fn argument_error_response(
+    text: &str,
+    error: &(dyn std::error::Error + Send + Sync),
+) -> String {
+    let cmd = get_cmd_matches(text.trim())
+        .map(|cmd| cmd.cmd)
+        .unwrap_or_default();
+    let example = match cmd.as_str() {
+        "stats" | "statistics" => "/stats moon",
+        "form" | "recentform" => "/form moon",
+        "predict" | "prediction" | "predictions" | "winpct" => "/predict 30",
+        "results" => "/results @username",
+        "activity" | "games" | "played" | "daily" => "/activity @username",
+        "lastplayed" => "/lastplayed @username",
+        "add" | "instant" | "heti" | "kynär" | "kynäri" => "/add",
+        _ if matches_timed_queue(&cmd) => "/1930",
+        _ => "/help all",
+    };
+    let reason = error.to_string().chars().take(200).collect::<String>();
+    let mut chars = reason.chars();
+    let reason = chars
+        .next()
+        .map(|first| format!("{}{}", first.to_uppercase(), chars.as_str()))
+        .unwrap_or_else(|| "Invalid arguments".into());
+    let reason = if reason.ends_with('.') {
+        reason
+    } else {
+        format!("{reason}.")
+    };
+    format!(
+        "{}\nTry {example}{}",
+        crate::util::escape_html(&reason),
+        if matches!(cmd.as_str(), "stats" | "statistics" | "form" | "recentform") {
+            " or /help all for available styles."
+        } else {
+            "."
+        }
+    )
+}
+
 pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Error + Send + Sync>> {
     let text = text.trim();
 
@@ -404,8 +494,72 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
         // we want to handle.
         let CmdMatches { cmd, args, .. } = cmd_matches;
 
+        if args.is_some()
+            && matches!(
+                cmd.as_str(),
+                "version"
+                    | "v"
+                    | "rm"
+                    | "ls"
+                    | "list"
+                    | "count"
+                    | "aim"
+                    | "positioning"
+                    | "pos"
+                    | "utility"
+                    | "util"
+                    | "nades"
+                    | "opening"
+                    | "openingduels"
+                    | "duels"
+                    | "clutch"
+                    | "clutches"
+                    | "teamflash"
+                    | "tf"
+                    | "flash"
+                    | "flashes"
+                    | "blind"
+                    | "hallofshame"
+                    | "wallofshame"
+                    | "shame"
+                    | "halloffame"
+                    | "walloffame"
+                    | "fame"
+                    | "top"
+                    | "top10"
+                    | "ranks"
+                    | "premier"
+                    | "temperature"
+                    | "weather"
+                    | "sahko"
+                    | "el"
+                    | "elpriser"
+                    | "wingman"
+                    | "office"
+                    | "italy"
+                    | "mirage"
+                    | "overpass"
+                    | "nuke"
+                    | "train"
+                    | "vertigo"
+                    | "dust2"
+                    | "cache"
+                    | "ancient"
+                    | "anubis"
+            )
+        {
+            return Err(argument_error("This command doesn’t take arguments.").into());
+        }
+        if args.is_some() && matches_cs_map_name(&cmd) {
+            return Err(argument_error("Map leaderboards don’t take arguments.").into());
+        }
         match cmd.as_str() {
-            "help" | "info" | "version" | "v" | "start" => Some(Command::Help),
+            "help" | "info" | "start" => Some(match args.as_deref() {
+                None => Command::Help,
+                Some("all") => Command::HelpAll,
+                Some(_) => return Err(argument_error("Use /help or /help all.").into()),
+            }),
+            "version" | "v" => Some(Command::Version),
             "rm" => Some(Command::RemoveAll),
             "ls" | "list" | "count" => Some(Command::List),
             "predict" | "prediction" | "predictions" | "winpct" => {
@@ -453,12 +607,12 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "sahko" | "el" | "elpriser" => Some(Command::Sahko),
 
             "activity" | "games" | "played" | "daily" => {
-                let for_user = args.and_then(parse_username_arg);
+                let for_user = target_arg(args)?;
                 Some(Command::Activity { for_user })
             }
 
             "results" => {
-                let for_user = args.and_then(parse_username_arg);
+                let for_user = target_arg(args)?;
                 Some(Command::Results { for_user })
             }
 
@@ -504,12 +658,12 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             }),
 
             "lastplayed" => {
-                let for_user = args.and_then(parse_username_arg);
+                let for_user = target_arg(args)?;
 
                 Some(Command::LastPlayed { for_user })
             }
             "add" | "instant" | "heti" | "kynär" | "kynäri" => {
-                let for_user = args.and_then(parse_username_arg);
+                let for_user = target_arg(args)?;
 
                 Some(Command::AddRemove {
                     time: None,
@@ -520,8 +674,10 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                 // Didn't match any of our normal commands, check for timed
                 // queue command match.
                 if matches_timed_queue(&cmd) {
-                    let parsed_time = parse_time_arg(&cmd)?;
-                    let for_user = args.and_then(parse_username_arg);
+                    let parsed_time = parse_time_arg(&cmd).map_err(|_| {
+                        argument_error("Invalid queue time. Use HHMM in 24-hour time.")
+                    })?;
+                    let for_user = target_arg(args)?;
 
                     Some(Command::AddRemove {
                         time: Some(parsed_time),
@@ -548,6 +704,84 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_and_version_have_distinct_routes_and_useful_details() {
+        assert!(matches!(parse_cmd("/help").unwrap(), Some(Command::Help)));
+        assert!(matches!(parse_cmd("/start").unwrap(), Some(Command::Help)));
+        assert!(matches!(
+            parse_cmd("/help all").unwrap(),
+            Some(Command::HelpAll)
+        ));
+        assert!(matches!(
+            parse_cmd("/version").unwrap(),
+            Some(Command::Version)
+        ));
+        assert!(matches!(parse_cmd("/v").unwrap(), Some(Command::Version)));
+        assert!(Command::help().len() < HELP_TEXT.len());
+        assert!(HELP_TEXT.contains("Last verified squad match"));
+        assert!(HELP_TEXT.contains("per 100 rounds"));
+        assert!(HELP_TEXT.contains("/mirage"));
+        assert!(HELP_TEXT.encode_utf16().count() < 4096);
+        assert!(version().ends_with(env!("ADD_BOT_BUILD_COMMIT")));
+        if let Ok(commit) = std::env::var("ADD_BOT_COMMIT") {
+            assert!(version().ends_with(&commit[..7]));
+        }
+        assert!(!version().contains("Queues"));
+    }
+
+    #[test]
+    fn malformed_arguments_get_actionable_html_safe_errors() {
+        for input in [
+            "/results Alice",
+            "/activity @username extra",
+            "/lastplayed @bad",
+            "/add garbage",
+            "/1930 @username extra",
+            "/2460",
+            "/predict many",
+            "/form 7",
+            "/help unknown",
+            "/el unexpected",
+        ] {
+            let error = match parse_cmd(input) {
+                Err(error) => error,
+                Ok(_) => panic!("Accepted malformed command: {input}"),
+            };
+            let response = argument_error_response(input, error.as_ref());
+            assert!(response.contains("\nTry /"), "{input}: {response}");
+        }
+        let error = match parse_cmd("/form mooon") {
+            Err(error) => error,
+            _ => panic!("accepted unknown style"),
+        };
+        assert_eq!(
+            argument_error_response("/form mooon", error.as_ref()),
+            "Unknown form style “mooon”.\nTry /form moon or /help all for available styles."
+        );
+        let error = match parse_cmd("/form <b>") {
+            Err(error) => error,
+            _ => panic!("accepted unknown style"),
+        };
+        assert!(argument_error_response("/form <b>", error.as_ref()).contains("&lt;b&gt;"));
+        assert!(matches!(
+            parse_cmd("/results @username").unwrap(),
+            Some(Command::Results { for_user: Some(_) })
+        ));
+    }
+
+    #[test]
+    fn foreign_bot_commands_are_ignored_even_with_bad_arguments() {
+        assert!(parse_cmd_for_bot("/form@OtherBot nonsense", "AddBot")
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            parse_cmd_for_bot("/help@aDdBoT all", "AddBot").unwrap(),
+            Some(Command::HelpAll)
+        ));
+        assert!(parse_cmd_for_bot("hello", "AddBot").unwrap().is_none());
+        assert!(parse_cmd_for_bot("/unrelated", "AddBot").unwrap().is_none());
+    }
 
     #[test]
     fn custom_form_themes_accept_three_complete_emoji() {

@@ -71,6 +71,8 @@ async fn handle_cmd_inner(
 
     let text = match cmd {
         Command::Help => Command::help(),
+        Command::HelpAll => crate::command::HELP_TEXT.to_string(),
+        Command::Version => crate::command::version(),
         Command::AddRemove { time, for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
             add_remove(&settings, username, state, chat_id, &tz, time, &sc).await
@@ -124,7 +126,13 @@ async fn handle_cmd_inner(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch price chart: {}", e);
-                    return None;
+                    send_msg(
+                        &bot,
+                        &chat_id,
+                        &crate::services::failure::message(&e, "Electricity chart", "/el"),
+                    )
+                    .await;
+                    return Some(());
                 }
             };
 
@@ -136,7 +144,13 @@ async fn handle_cmd_inner(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch activity chart: {}", e);
-                    return None;
+                    send_msg(
+                        &bot,
+                        &chat_id,
+                        &crate::services::failure::message(&e, "Activity chart", "/activity"),
+                    )
+                    .await;
+                    return Some(());
                 }
             };
 
@@ -148,7 +162,13 @@ async fn handle_cmd_inner(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch results chart: {}", e);
-                    return None;
+                    send_msg(
+                        &bot,
+                        &chat_id,
+                        &crate::services::failure::message(&e, "Results chart", "/results"),
+                    )
+                    .await;
+                    return Some(());
                 }
             };
 

@@ -2,6 +2,26 @@
 
 trashety trash Telegram bot
 
+## Help, version, and failures
+
+`/help` (also `/start` and `/info`) shows a short grouped overview. `/help all`
+retains detailed commands, map rankings, targeting rules, form themes, and
+examples. `/version` (also `/v`) returns the package version and build commit.
+CI embeds the deployed commit in the binary; local builds use Git when available.
+Source archives without Git can set `ADD_BOT_COMMIT`; otherwise the commit is
+reported as unknown.
+
+Recognized commands with invalid arguments explain the problem and provide a
+valid example. Malformed targets are rejected instead of falling back to another
+scope. Commands explicitly addressed to another bot are ignored.
+
+Data failures distinguish unlinked players, private profiles, unavailable or
+empty histories, and upstream connection/status/response failures. Chart
+failures produce a reply. Available charts with missing player histories show a
+partial-history notice inside the image; entirely failed lookups retain the
+actual failure cause. Internal diagnostics stay in logs. Weather configuration
+errors ask an admin to set a location.
+
 ## Queue and player output
 
 Queue updates use compact headers with active occupancy, separate reserve lists,

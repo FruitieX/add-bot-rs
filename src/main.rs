@@ -2,7 +2,7 @@ use crate::state_container::StateContainer;
 use chrono_tz::Tz;
 use clap::Parser;
 use color_eyre::Result;
-use teloxide::{types::Message, utils::client_from_env, Bot};
+use teloxide::{prelude::Requester, types::Message, utils::client_from_env, Bot};
 
 mod bot;
 mod command;
@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
     // Initialize the Telegram bot API.
     pretty_env_logger::init();
     let bot = Bot::with_client(&settings.teloxide.bot_api_token, client_from_env());
+    let bot_username = bot.get_me().await?.username.clone().unwrap_or_default();
 
     // Spawn a new task that polls for queues that have timed out.
     tokio::spawn(commands::queue::poll_for_timeouts(
@@ -47,16 +48,27 @@ async fn main() -> Result<()> {
     teloxide::repl(bot.clone(), move |message: Message, bot: Bot| {
         let settings = settings.clone();
         let sc = sc.clone();
+        let bot_username = bot_username.clone();
 
         async move {
             let msg_text = message.text();
 
             // Only attempt parsing message if there's any message text.
             if let Some(msg_text) = msg_text {
-                let cmd = command::parse_cmd(msg_text);
-
-                if let Ok(Some(cmd)) = cmd {
-                    bot::handle_cmd(settings, sc, tz, bot, message, cmd).await;
+                match command::parse_cmd_for_bot(msg_text, &bot_username) {
+                    Ok(Some(cmd)) => {
+                        bot::handle_cmd(settings, sc, tz, bot, message, cmd).await;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!("Command arguments rejected: {error}");
+                        util::send_msg(
+                            &bot,
+                            &message.chat.id,
+                            &command::argument_error_response(msg_text, error.as_ref()),
+                        )
+                        .await;
+                    }
                 }
             }
 

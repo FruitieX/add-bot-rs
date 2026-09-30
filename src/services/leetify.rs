@@ -1,3 +1,4 @@
+use super::failure::{self, DataFailure};
 use cached::proc_macro::cached;
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
@@ -227,22 +228,17 @@ async fn get_leetify_profile(settings: &Settings, steam_id: &SteamID) -> Result<
         .await
 }
 
-pub async fn get_leetify_mini_profile(
+async fn get_leetify_mini_profile_checked(
     settings: &Settings,
-    steam_id: SteamID,
-) -> Option<LeetifyMiniProfile> {
-    println!("Fetching Leetify profile for SteamID {steam_id}");
-
-    let url = format!("{LEETIFY_API_BASE_URL}/v3/profile?steam64_id={steam_id}");
-    let err_context = format!("Error while fetching {url}");
-    let profile = unwrap_or_log(get_leetify_profile(settings, &steam_id).await, &err_context)?;
-
+    steam_id: &SteamID,
+) -> Result<LeetifyMiniProfile> {
+    let profile = get_leetify_profile(settings, steam_id)
+        .await
+        .map_err(|error| failure::upstream(error, "Leetify"))?;
     if profile.privacy_mode != "public" {
-        eprintln!("Leetify profile for SteamID {steam_id} is private");
-        return None;
+        return Err(DataFailure::PrivateProfile.into());
     }
-
-    Some(profile.into())
+    Ok(profile.into())
 }
 
 fn public_match_to_game(game: PublicMatch, steam_id: &SteamID) -> Option<LeetifyGame> {
@@ -349,17 +345,25 @@ async fn get_leetify_games_cached(
     client: LeetifyClient,
     steam_id: SteamID,
 ) -> Result<Vec<LeetifyGame>> {
-    let url = format!("{LEETIFY_API_BASE_URL}/v3/profile/matches?steam64_id={steam_id}");
-    let err_context = format!("Error while fetching {url}");
     let matches = client
         .get::<Vec<PublicMatch>>("/v3/profile/matches", &steam_id)
         .await
-        .map_err(|error| eyre!("{err_context}: {error}"))?;
+        .map_err(|error| failure::upstream(error, "Leetify"))?;
 
-    Ok(matches
+    let count = matches.len();
+    let games = matches
         .into_iter()
         .filter_map(|game| public_match_to_game(game, &steam_id))
-        .collect())
+        .collect::<Vec<_>>();
+    if games.len() != count {
+        eprintln!("Leetify match history for {steam_id} contains incomplete player records");
+        return Err(DataFailure::Upstream {
+            service: "Leetify",
+            cause: failure::RequestFailure::InvalidResponse,
+        }
+        .into());
+    }
+    Ok(games)
 }
 
 async fn get_leetify_games_with_client(
@@ -380,6 +384,58 @@ pub(crate) async fn get_leetify_games(
 ) -> Option<Vec<LeetifyGame>> {
     let client = LeetifyClient::from_settings(settings);
     get_leetify_games_with_client(&client, steam_id).await
+}
+
+pub(crate) async fn get_leetify_games_checked(
+    settings: &Settings,
+    steam_id: &SteamID,
+) -> Result<Vec<LeetifyGame>> {
+    get_leetify_games_cached(LeetifyClient::from_settings(settings), steam_id.clone()).await
+}
+
+pub(crate) struct PlayerHistories {
+    pub games: Vec<(String, Vec<LeetifyGame>)>,
+    pub unavailable: Vec<String>,
+}
+
+pub(crate) fn collect_player_histories(
+    results: Vec<(Username, Result<Vec<LeetifyGame>>)>,
+    required: Option<&Username>,
+) -> Result<PlayerHistories> {
+    let mut histories = PlayerHistories {
+        games: Vec::new(),
+        unavailable: Vec::new(),
+    };
+    let mut first_error = None;
+    for (name, result) in results {
+        match result {
+            Ok(games) => histories.games.push((name.to_string(), games)),
+            Err(error) => {
+                if required == Some(&name) {
+                    return Err(error);
+                }
+                eprintln!("Match history unavailable for {name}: {error:?}");
+                histories.unavailable.push(name.to_string());
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    let has_games = histories.games.iter().any(|(name, games)| {
+        !games.is_empty() && required.is_none_or(|user| name == &user.to_string())
+    });
+    if !has_games {
+        if required.is_some() {
+            return Err(DataFailure::NoMatches(required.cloned()).into());
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        return Err(DataFailure::NoMatches(required.cloned()).into());
+    }
+    histories.unavailable.sort();
+    Ok(histories)
 }
 
 fn match_cache_file_path(cache_path: &Path, match_id: &str) -> Option<PathBuf> {
@@ -859,9 +915,7 @@ async fn find_last_squad_match(
         }
         let Some(id) = &game.id else {
             if latest.is_none() {
-                return Err(eyre!(
-                    "A newer match has no ID; last squad match cannot be verified"
-                ));
+                return Err(DataFailure::IncompleteRosters.into());
             }
             streak_known = false;
             break;
@@ -880,7 +934,10 @@ async fn find_last_squad_match(
             });
         let verified = match verified {
             Ok(value) => value,
-            Err(error) if latest.is_none() => return Err(error),
+            Err(error) if latest.is_none() => {
+                eprintln!("Last squad roster verification failed: {error:?}");
+                return Err(DataFailure::IncompleteRosters.into());
+            }
             Err(error) => {
                 eprintln!("Cannot verify older streak history: {error}");
                 streak_known = false;
@@ -904,8 +961,7 @@ async fn find_last_squad_match(
             }
         }
     }
-    let mut latest =
-        latest.ok_or_else(|| eyre!("No verified squad match in the available history"))?;
+    let mut latest = latest.ok_or(DataFailure::NoSquadMatch)?;
     latest.spree =
         (with_streak && streak_known).then(|| squad_playing_streak(dates, now.date_naive()));
     Ok(latest)
@@ -917,10 +973,11 @@ pub async fn last_played(
     tz: Tz,
 ) -> Result<LastPlayedResult> {
     let steamid = steamid_for_username(settings.clone(), username)
-        .ok_or_else(|| eyre!("No SteamID configured for user {username}"))?;
-    let games = get_leetify_games(settings, &steamid)
-        .await
-        .ok_or_else(|| eyre!("Failed to fetch match history from Leetify"))?;
+        .ok_or_else(|| DataFailure::Unlinked(username.clone()))?;
+    let games = get_leetify_games_checked(settings, &steamid).await?;
+    if games.is_empty() {
+        return Err(DataFailure::NoMatches(Some(username.clone())).into());
+    }
     find_last_squad_match(
         settings,
         &steamid,
@@ -987,13 +1044,8 @@ pub struct LeetifyMiniProfile {
 
 pub async fn player_stats(settings: &Settings, username: &Username) -> Result<LeetifyMiniProfile> {
     let steamid = steamid_for_username(settings.clone(), username)
-        .ok_or_else(|| eyre!(format!("No SteamID configured for user {username}")))?;
-
-    let mini_profile = get_leetify_mini_profile(settings, steamid.clone())
-        .await
-        .ok_or_else(|| eyre!("Failed to fetch last played stats from Leetify"))?;
-
-    Ok(mini_profile)
+        .ok_or_else(|| DataFailure::Unlinked(username.clone()))?;
+    get_leetify_mini_profile_checked(settings, &steamid).await
 }
 
 pub const RECENT_MATCHES_LIMIT: usize = 30;
@@ -1100,19 +1152,15 @@ fn recent_teammate_games(games: &[LeetifyGame]) -> Vec<&LeetifyGame> {
 
 pub async fn teammate_stats(settings: &Settings, username: &Username) -> Result<TeammateStats> {
     let own_steamid = steamid_for_username(settings.clone(), username)
-        .ok_or_else(|| eyre!(format!("No SteamID configured for user {username}")))?;
-    let games = get_leetify_games(settings, &own_steamid)
-        .await
-        .ok_or_else(|| eyre!("Failed to fetch match stats from Leetify"))?;
+        .ok_or_else(|| DataFailure::Unlinked(username.clone()))?;
+    let games = get_leetify_games_checked(settings, &own_steamid).await?;
     let recent = recent_teammate_games(&games);
     let match_ids = recent
         .iter()
         .filter_map(|game| game.id.clone())
         .collect::<HashSet<_>>();
     if match_ids.len() != recent.len() {
-        return Err(eyre!(
-            "Recent matches have missing IDs; teammate records are unavailable"
-        ));
+        return Err(DataFailure::IncompleteRosters.into());
     }
     let hydration = get_leetify_matches(settings, match_ids.clone()).await;
     // A partial sample could misleadingly undercount games with a teammate.
@@ -1124,9 +1172,7 @@ pub async fn teammate_stats(settings: &Settings, username: &Username) -> Result<
                 .any(|team| team.steam64_ids.contains(&own_steamid))
         })
     }) {
-        return Err(eyre!(
-            "Incomplete match rosters; teammate records are unavailable"
-        ));
+        return Err(DataFailure::IncompleteRosters.into());
     }
 
     Ok(teammate_stats_from_matches(
@@ -1149,6 +1195,9 @@ pub struct HallOfShame {
 }
 
 pub async fn hall_of_shame(settings: &Settings, tz: Tz) -> Result<HallOfShame> {
+    if settings.players.steamid_mappings.is_empty() {
+        return Err(DataFailure::NoPlayers.into());
+    }
     let configured_games = get_configured_player_games(settings).await;
     let mut entries = Vec::new();
     let mut unavailable = Vec::new();
@@ -1204,8 +1253,35 @@ pub struct HallOfFame {
     pub median_skill_level: u32,
 }
 
+/// Keep an all-failed lookup distinct from a successful lookup with no entries.
+fn collect_player_entries<T>(results: Vec<Result<Option<T>>>) -> Result<Vec<T>> {
+    let mut entries = Vec::new();
+    let mut failure = None;
+    for result in results {
+        match result {
+            Ok(Some(entry)) => entries.push(entry),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Player data unavailable: {error:?}");
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+            }
+        }
+    }
+    if entries.is_empty() {
+        if let Some(error) = failure {
+            return Err(error);
+        }
+    }
+    Ok(entries)
+}
+
 /// List top 10 players based on their skill level in their most recent game
 pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<HallOfFame> {
+    if settings.players.steamid_mappings.is_empty() {
+        return Err(DataFailure::NoPlayers.into());
+    }
     let steamid_mappings = settings.players.steamid_mappings.clone();
 
     let futures: Vec<_> = steamid_mappings
@@ -1215,13 +1291,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
             let settings = settings.clone();
 
             async move {
-                let resp = get_leetify_mini_profile(&settings, steamid.clone()).await;
-
-                let Some(resp) = resp else {
-                    eprintln!("Failed to fetch Leetify mini profile for player {username}");
-
-                    return None;
-                };
+                let resp = get_leetify_mini_profile_checked(&settings, &steamid).await?;
 
                 let leetify_rank = resp.ranks.iter().find(|r| {
                     if rank_type == "wingman" {
@@ -1236,13 +1306,13 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
                 let Some(skill_level) = skill_level else {
                     eprintln!("Failed to find {rank_type} rank for player {username}");
 
-                    return None;
+                    return Ok(None);
                 };
 
-                Some(HallOfFameEntry {
+                Ok(Some(HallOfFameEntry {
                     username: username.clone(),
                     skill_level,
-                })
+                }))
             }
         })
         .collect();
@@ -1254,7 +1324,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
     // wait for all futures to complete
     let tasks_results = stream.collect::<Vec<_>>().await;
 
-    let mut entries: Vec<HallOfFameEntry> = tasks_results.into_iter().flatten().collect();
+    let mut entries: Vec<HallOfFameEntry> = collect_player_entries(tasks_results)?;
 
     // Don't include players with no rank
     entries.retain(|entry| entry.skill_level != 0);
@@ -1324,6 +1394,9 @@ fn numeric_median(sorted: &[f32]) -> f32 {
 
 /// List players based on a specific stat (aim, positioning, utility, opening, clutch).
 pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<StatLeaderboard> {
+    if settings.players.steamid_mappings.is_empty() {
+        return Err(DataFailure::NoPlayers.into());
+    }
     let steamid_mappings = settings.players.steamid_mappings.clone();
 
     let futures: Vec<_> = steamid_mappings
@@ -1333,13 +1406,7 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
             let settings = settings.clone();
 
             async move {
-                let resp = get_leetify_mini_profile(&settings, steamid.clone()).await;
-
-                let Some(resp) = resp else {
-                    eprintln!("Failed to fetch Leetify mini profile for player {username}");
-
-                    return None;
-                };
+                let resp = get_leetify_mini_profile_checked(&settings, &steamid).await?;
 
                 let stat_value = match stat_type.as_str() {
                     "aim" => resp.ratings.aim,
@@ -1347,13 +1414,13 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
                     "utility" => resp.ratings.utility,
                     "opening" => resp.ratings.opening,
                     "clutch" => resp.ratings.clutch,
-                    _ => return None,
+                    _ => return Ok(None),
                 };
 
-                Some(StatLeaderboardEntry {
+                Ok(Some(StatLeaderboardEntry {
                     username: username.clone(),
                     stat_value,
-                })
+                }))
             }
         })
         .collect();
@@ -1365,7 +1432,7 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
     // wait for all futures to complete
     let tasks_results = stream.collect::<Vec<_>>().await;
 
-    let mut entries: Vec<StatLeaderboardEntry> = tasks_results.into_iter().flatten().collect();
+    let mut entries: Vec<StatLeaderboardEntry> = collect_player_entries(tasks_results)?;
 
     // Sort by stat value, highest first
     entries.sort_by(|a, b| {
@@ -1408,6 +1475,9 @@ pub struct TeamFlashLeaderboard {
 
 /// List players ranked by teammates flashed per round (highest = most team flashes = worst)
 pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLeaderboard> {
+    if settings.players.steamid_mappings.is_empty() {
+        return Err(DataFailure::NoPlayers.into());
+    }
     let steamid_mappings = settings.players.steamid_mappings.clone();
 
     let futures: Vec<_> = steamid_mappings
@@ -1416,12 +1486,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
             let settings = settings.clone();
 
             async move {
-                let games = get_leetify_games(&settings, &steamid).await;
-
-                let Some(games) = games else {
-                    eprintln!("Failed to fetch Leetify stats for player {username}");
-                    return None;
-                };
+                let games = get_leetify_games_checked(&settings, &steamid).await?;
 
                 // The public API exposes total flashbangs thrown, friendly flash hits, and round counts per match.
                 let (thrown, flashes, rounds) =
@@ -1453,15 +1518,15 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
                 )) = rates
                 else {
                     eprintln!("Failed to find flashbang rates for player {username}");
-                    return None;
+                    return Ok(None);
                 };
 
-                Some(TeamFlashEntry {
+                Ok(Some(TeamFlashEntry {
                     username: username.clone(),
                     flashbangs_thrown_per_round,
                     teammates_flashed_per_round,
                     teammates_flashed_per_flash,
-                })
+                }))
             }
         })
         .collect();
@@ -1469,7 +1534,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
     let stream = futures::stream::iter(futures).buffer_unordered(3);
     let tasks_results = stream.collect::<Vec<_>>().await;
 
-    let mut entries: Vec<TeamFlashEntry> = tasks_results.into_iter().flatten().collect();
+    let mut entries: Vec<TeamFlashEntry> = collect_player_entries(tasks_results)?;
 
     // Sort by teammates flashed, highest first (most team flashes = "winner" of hall of shame)
     entries.sort_by(|a, b| {
@@ -1521,6 +1586,111 @@ mod tests {
     use std::collections::HashMap;
 
     const PUBLIC_TEST_STEAM_ID: &str = "76561198016607756";
+
+    #[test]
+    fn failed_player_lookups_are_not_reported_as_successful_empty_leaderboards() {
+        assert!(
+            collect_player_entries::<u32>(vec![Err(DataFailure::PrivateProfile.into())]).is_err()
+        );
+        assert!(collect_player_entries::<u32>(vec![Ok(None)])
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            collect_player_entries(vec![Ok(Some(42)), Err(DataFailure::PrivateProfile.into())])
+                .unwrap(),
+            vec![42]
+        );
+        assert!(collect_player_entries::<u32>(vec![
+            Ok(None),
+            Err(DataFailure::PrivateProfile.into())
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn partial_histories_keep_available_games_and_never_invent_empty_history() {
+        let alice = Username::new("Alice".into());
+        let bob = Username::new("Bob".into());
+        let game = squad_fixture("partial-history", Utc::now(), true).0;
+        let history = collect_player_histories(
+            vec![
+                (alice.clone(), Ok(vec![game.clone()])),
+                (bob.clone(), Err(DataFailure::PrivateProfile.into())),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(history.games.len(), 1);
+        assert_eq!(history.unavailable, vec!["Bob"]);
+        let all_failed = collect_player_histories(
+            vec![(bob.clone(), Err(DataFailure::PrivateProfile.into()))],
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(
+            all_failed.downcast_ref::<DataFailure>(),
+            Some(DataFailure::PrivateProfile)
+        ));
+        assert!(collect_player_histories(
+            vec![
+                (alice.clone(), Ok(vec![game])),
+                (bob.clone(), Err(DataFailure::PrivateProfile.into()))
+            ],
+            Some(&bob)
+        )
+        .is_err());
+        let empty = collect_player_histories(
+            vec![
+                (alice.clone(), Ok(vec![])),
+                (bob, Err(DataFailure::PrivateProfile.into())),
+            ],
+            Some(&alice),
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(
+            empty.downcast_ref::<DataFailure>(),
+            Some(DataFailure::NoMatches(Some(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn unlinked_targets_and_unconfigured_groups_fail_before_network_requests() {
+        let (mut settings, _) = cached_squad_fixtures(&[]).await;
+        let name = Username::new("Unlinked".into());
+        for error in [
+            player_stats(&settings, &name).await.unwrap_err(),
+            last_played(&settings, &name, chrono_tz::UTC)
+                .await
+                .unwrap_err(),
+            crate::services::results::get_results_chart(&settings, Some(&name))
+                .await
+                .unwrap_err(),
+            crate::services::activity::get_activity_chart(&settings, Some(&name))
+                .await
+                .unwrap_err(),
+        ] {
+            assert!(matches!(
+                error.downcast_ref::<DataFailure>(),
+                Some(DataFailure::Unlinked(_))
+            ));
+        }
+        settings.players.steamid_mappings.clear();
+        for error in [
+            crate::services::results::get_results_chart(&settings, None)
+                .await
+                .unwrap_err(),
+            crate::services::activity::get_activity_chart(&settings, None)
+                .await
+                .unwrap_err(),
+        ] {
+            assert!(matches!(
+                error.downcast_ref::<DataFailure>(),
+                Some(DataFailure::NoPlayers)
+            ));
+        }
+    }
 
     fn squad_fixture(
         id: &str,
