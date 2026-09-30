@@ -1,18 +1,16 @@
 use std::collections::{HashSet, VecDeque};
+use std::sync::LazyLock;
 
+use ab_glyph::{point, Font, FontRef, OutlinedGlyph, Rect, ScaleFont};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use color_eyre::{eyre::eyre, Result};
 use plotters::{
     coord::Shift,
     element::DashedPathElement,
     prelude::{
-        BitMapBackend, Circle, DrawingArea, IntoDrawingArea, PathElement, Polygon, Rectangle, Text,
+        BitMapBackend, Circle, DrawingArea, IntoDrawingArea, PathElement, Polygon, Rectangle,
     },
-    style::{
-        self, register_font,
-        text_anchor::{HPos, Pos, VPos},
-        Color, IntoFont, RGBColor, TextStyle, WHITE,
-    },
+    style::{text_anchor::HPos, Color, RGBColor, WHITE},
 };
 
 use crate::{
@@ -37,6 +35,53 @@ const INK: RGBColor = RGBColor(25, 43, 54);
 const MUTED: RGBColor = RGBColor(101, 118, 129);
 const BORDER: RGBColor = RGBColor(229, 234, 240);
 const COLORS: [RGBColor; 3] = [WIN, LOSS, TIE];
+
+static REGULAR_FONT: LazyLock<FontRef<'static>> = LazyLock::new(|| {
+    FontRef::try_from_slice(include_bytes!("../../assets/Roboto-Regular.ttf"))
+        .expect("bundled regular font must be valid")
+});
+static BOLD_FONT: LazyLock<FontRef<'static>> = LazyLock::new(|| {
+    FontRef::try_from_slice(include_bytes!("../../assets/Roboto-Bold.ttf"))
+        .expect("bundled bold font must be valid")
+});
+
+struct TextLayout {
+    glyphs: Vec<OutlinedGlyph>,
+    bounds: Option<Rect>,
+}
+
+fn layout_text(value: &str, size: u32, bold: bool) -> TextLayout {
+    let font = if bold { &*BOLD_FONT } else { &*REGULAR_FONT };
+    let scaled = font.as_scaled(size as f32);
+    let mut cursor = 0.0;
+    let mut previous = None;
+    let mut layout = TextLayout {
+        glyphs: Vec::new(),
+        bounds: None,
+    };
+    for character in value.chars() {
+        let mut glyph = scaled.scaled_glyph(character);
+        if let Some(previous) = previous {
+            cursor += scaled.kern(previous, glyph.id);
+        }
+        // Outline at its fractional position, including the glyph's side bearings.
+        glyph.position = point(cursor, 0.0);
+        cursor += scaled.h_advance(glyph.id);
+        previous = Some(glyph.id);
+        if let Some(outlined) = font.outline_glyph(glyph) {
+            let bounds = outlined.px_bounds();
+            layout.bounds = Some(match layout.bounds {
+                Some(old) => Rect {
+                    min: point(old.min.x.min(bounds.min.x), old.min.y.min(bounds.min.y)),
+                    max: point(old.max.x.max(bounds.max.x), old.max.y.max(bounds.max.y)),
+                },
+                None => bounds,
+            });
+            layout.glyphs.push(outlined);
+        }
+    }
+    layout
+}
 
 fn game_key(game: &LeetifyGame) -> String {
     game.id.clone().unwrap_or_else(|| {
@@ -158,19 +203,36 @@ fn text(
     color: RGBColor,
     anchor: HPos,
 ) -> Result<()> {
-    let font_style =
-        if size >= 23 || value == "WIN RATE" || value == "EVEN" || value.starts_with("MORE ") {
-            style::FontStyle::Bold
-        } else {
-            style::FontStyle::Normal
-        };
-    root.draw(&Text::new(
-        value,
-        position,
-        TextStyle::from(("sans-serif", size, font_style).into_font())
-            .color(&color)
-            .pos(Pos::new(anchor, VPos::Top)),
-    ))?;
+    let bold = size >= 23 || value == "WIN RATE" || value == "EVEN" || value.starts_with("MORE ");
+    let layout = layout_text(value, size, bold);
+    let Some(bounds) = layout.bounds else {
+        return Ok(());
+    };
+    let anchor_x = match anchor {
+        HPos::Left => bounds.min.x,
+        HPos::Center => (bounds.min.x + bounds.max.x) / 2.0,
+        HPos::Right => bounds.max.x,
+    };
+    let offset_x = position.0 - anchor_x.round() as i32;
+    let offset_y = position.1 - bounds.min.y as i32;
+    // Plotters' ab_glyph backend omits px_bounds().min.x and truncates advances
+    // before outlining. Rasterize correctly positioned glyphs directly instead.
+    for glyph in layout.glyphs {
+        let bounds = glyph.px_bounds();
+        let mut failure = None;
+        glyph.draw(|x, y, coverage| {
+            if coverage > 0.0 && failure.is_none() {
+                let pixel = (
+                    offset_x + bounds.min.x as i32 + x as i32,
+                    offset_y + bounds.min.y as i32 + y as i32,
+                );
+                failure = root.draw_pixel(pixel, &color.mix(coverage as f64)).err();
+            }
+        });
+        if let Some(error) = failure {
+            return Err(error.into());
+        }
+    }
     Ok(())
 }
 
@@ -190,18 +252,6 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
     let rows = data.daily.iter().map(Vec::len).max().unwrap_or(0).max(4);
     let legend_y = TILE_TOP + rows as i32 * TILE_STEP + 28;
     let height = (legend_y + 90) as u32;
-    register_font(
-        "sans-serif",
-        style::FontStyle::Normal,
-        include_bytes!("../../assets/Roboto-Regular.ttf"),
-    )
-    .map_err(|_| eyre!("Failed to register font"))?;
-    register_font(
-        "sans-serif",
-        style::FontStyle::Bold,
-        include_bytes!("../../assets/Roboto-Bold.ttf"),
-    )
-    .map_err(|_| eyre!("Failed to register bold font"))?;
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)).into_drawing_area();
@@ -368,14 +418,17 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
             7,
             MUTED.mix(0.75).stroke_width(2),
         ))?;
-        // Isolated observations remain visible, including a single complete window.
-        for point in &data.trend {
-            if let Some(rate) = point.rate {
+        // Connected observations need no scatter markers. Short strokes preserve
+        // genuinely isolated windows, such as a history with just 20 matches.
+        for (index, point) in data.trend.iter().enumerate() {
+            let previous = index.checked_sub(1).and_then(|i| data.trend[i].rate);
+            let next = data.trend.get(index + 1).and_then(|p| p.rate);
+            if let Some(rate) = point.rate.filter(|_| previous.is_none() && next.is_none()) {
                 let color = if rate >= 50.0 { WIN } else { LOSS };
-                root.draw(&Circle::new(
-                    (x_pixel(point.time.timestamp() as f64), y_pixel(rate)),
-                    2,
-                    color.filled(),
+                let x = x_pixel(point.time.timestamp() as f64);
+                root.draw(&PathElement::new(
+                    vec![(x - 4, y_pixel(rate)), (x + 4, y_pixel(rate))],
+                    color.stroke_width(4),
                 ))?;
             }
         }
@@ -601,6 +654,99 @@ mod tests {
     }
 
     #[test]
+    fn text_layout_preserves_fractional_advances_and_glyph_bearings() {
+        let layout = layout_text("jAV", 31, false);
+        let scaled = REGULAR_FONT.as_scaled(31.0);
+        let j = scaled.glyph_id('j');
+        let a = scaled.glyph_id('A');
+        let v = scaled.glyph_id('V');
+        let a_x = scaled.h_advance(j) + scaled.kern(j, a);
+        let v_x = a_x + scaled.h_advance(a) + scaled.kern(a, v);
+        assert_eq!(layout.glyphs[1].glyph().position.x, a_x);
+        assert_eq!(layout.glyphs[2].glyph().position.x, v_x);
+        assert_ne!(a_x.fract(), 0.0);
+        // j has an ink bearing left of its advance origin; the old renderer lost it.
+        assert!(layout.glyphs[0].px_bounds().min.x < 0.0);
+        assert!(layout.bounds.unwrap().min.x < 0.0);
+    }
+
+    #[test]
+    fn text_rasterization_respects_ink_alignment_with_descenders_and_spaces() {
+        for anchor in [HPos::Left, HPos::Center, HPos::Right] {
+            let mut buffer = vec![255; 320 * 80 * 3];
+            {
+                let root = BitMapBackend::with_buffer(&mut buffer, (320, 80)).into_drawing_area();
+                text(&root, "jAV  fj", (160, 12), 31, INK, anchor).unwrap();
+            }
+            let image = image::RgbImage::from_raw(320, 80, buffer).unwrap();
+            let pixels = image
+                .enumerate_pixels()
+                .filter(|(_, _, pixel)| pixel.0 != [255; 3])
+                .map(|(x, y, _)| (x as i32, y as i32))
+                .collect::<Vec<_>>();
+            let min_x = pixels.iter().map(|p| p.0).min().unwrap();
+            let max_x = pixels.iter().map(|p| p.0).max().unwrap();
+            assert!(pixels.iter().map(|p| p.1).min().unwrap() >= 12);
+            match anchor {
+                HPos::Left => assert!((min_x - 160).abs() <= 1),
+                HPos::Center => assert!(((min_x + max_x) / 2 - 160).abs() <= 1),
+                HPos::Right => assert!((max_x - 159).abs() <= 1),
+            }
+        }
+    }
+
+    fn sparse_history() -> ResultsData {
+        let start = today() - Duration::days(89);
+        let mut games = (0..19)
+            .map(|i| {
+                game(
+                    i,
+                    start - Duration::days(1),
+                    i as u32,
+                    if i < 7 { "win" } else { "loss" },
+                )
+            })
+            .collect::<Vec<_>>();
+        for (i, day) in [
+            7, 8, 32, 39, 40, 50, 52, 54, 55, 57, 58, 59, 60, 61, 65, 70, 71, 74, 76, 85, 86, 87,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            games.push(game(
+                19 + i,
+                start + Duration::days(day),
+                18,
+                if i % 3 == 0 { "loss" } else { "win" },
+            ));
+        }
+        collect_results(games, today())
+    }
+
+    #[test]
+    fn isolated_matches_between_inactive_gaps_do_not_gain_coloured_scatter_dots() {
+        let data = sparse_history();
+        let point = data.trend[2]; // Single match at day 32, between two long gaps.
+        assert!(point.time - data.trend[1].time > Duration::days(3));
+        assert!(data.trend[3].time - point.time > Duration::days(3));
+        let image = image::load_from_memory(&render_results(&data, None).unwrap())
+            .unwrap()
+            .to_rgb8();
+        let seconds =
+            (point.time - data.start.and_hms_opt(0, 0, 0).unwrap().and_utc()).num_seconds();
+        let x = LEFT + (seconds as f64 / (90.0 * 86400.0) * (RIGHT - LEFT) as f64).round() as i32;
+        let y = BOTTOM - (point.rate.unwrap() / 100.0 * (BOTTOM - TOP) as f64).round() as i32;
+        for x in x - 2..=x + 2 {
+            for y in y - 2..=y + 2 {
+                let pixel = image.get_pixel(x as u32, y as u32).0;
+                assert_ne!(pixel, [LOSS.0, LOSS.1, LOSS.2]);
+                assert_ne!(pixel, [WIN.0, WIN.1, WIN.2]);
+            }
+        }
+        assert_eq!(data.daily.iter().map(Vec::len).sum::<usize>(), 22);
+    }
+
+    #[test]
     fn rendering_handles_empty_short_tie_only_and_busy_days_without_clipping_tiles() {
         let cases = [
             vec![],
@@ -665,6 +811,15 @@ mod tests {
         std::fs::write(
             "target/results-preview.png",
             render_results(&collect_results(games, today()), None).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            "target/results-sparse-preview.png",
+            render_results(
+                &sparse_history(),
+                Some(&Username::new("Sample sparse history".into())),
+            )
+            .unwrap(),
         )
         .unwrap();
     }
