@@ -8,39 +8,58 @@ use crate::types::Username;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 lazy_static! {
     pub static ref HELP_TEXT: String = format!(
-        "add-bot v{VERSION}
+        "<b>add-bot v{VERSION}</b>
 
-The following commands are supported:
-<pre>
-- /1930         Add/remove player from timed queue at 19:30.
-- /add          Add/remove player from the instant queue.
-- /ls           List existing queues.
-- /predict [1-100]
-                Predicted win rates for current queues, using the latest 30 matches by default.
-- /rm           Remove yourself from all queues.
-- /lastplayed   Last played game stats for player.
-- /stats        Leetify stats with optional recent-form style and row width.
-- /form         Recent match form only, with optional style and row width.
-- /halloffame   Top 10 players by skill level.
-- /hallofshame  Top 10 players by last played date.
-- /aim          Leaderboard by aim rating.
-- /positioning  Leaderboard by positioning.
-- /utility      Leaderboard by utility usage.
-- /opening      Leaderboard by opening duels.
-- /clutch       Leaderboard by clutch rating.
-- /teamflash    Flashbangs thrown and teammates flashed per round.
-- /flashes      Flashbangs thrown and teammates flashed per round.
-- /activity     Daily games played by all players (last 90 days).
-- /results      Win-rate trend and match results for configured players (last 90 days).
-- /temperature  Current temperature for configured location.
-- /weather      Weather for configured location.
-</pre>
-Most commands accept an optional <code>@username</code> argument, which defaults to yourself.
-Append a style and/or 5 or 10 to <code>/stats</code> or <code>/form</code> to choose a format and row width.
-Styles: squares initially, letters, trophy, drama, mood, moon, xmas,
-halloween, burger, panda, noodle, pirate, space, cat, dog, weather, garden, arcade,
-slop, hotdog, stocks, team, random, counterstrike (cs2, kynäri), mistakes, bike, car, traffic.
-An explicit style on your own stats or form saves your icon preference. Requests without a style use the target user's saved preference."
+<b>Queues</b>
+/1930 — Join or leave the 19:30 queue.
+/add — Join or leave the instant queue.
+/ls — List queues.
+/predict — Predict queue win rates.
+/rm — Leave all queues.
+
+Use any HHMM time for a timed queue. Predictions use the latest 30 matches;
+<code>/predict 50</code> changes the match count (1–100).
+
+<b>Stats &amp; form</b>
+/lastplayed — Last game stats.
+/stats — Leetify stats and recent form.
+/form — Recent match form.
+/activity — Daily games over the last 90 days.
+/results — Win-rate trend and results over the last 90 days.
+
+Player stats default to yourself; add <code>@username</code> to view another player.
+Activity and results default to all configured players.
+
+<b>Leaderboards</b>
+/halloffame — Top 10 by skill.
+/hallofshame — Ranked by last played date.
+/aim — Aim rating.
+/positioning — Positioning rating.
+/utility — Utility rating.
+/opening — Opening duels.
+/clutch — Clutch rating.
+/teamflash — Team flashes per round (also /flashes).
+
+<b>Weather &amp; electricity</b>
+/temperature — Current temperature.
+/weather — Weather forecast.
+/el — Electricity prices and queue cost forecasts.
+
+<b>Form themes</b>
+Choose a theme and 5 or 10 results per row:
+<code>/form halloween</code>
+<code>/stats burger 5</code>
+<code>/form @username cs2 10</code>
+
+squares (initial default), letters, trophy, drama, mood, moon, xmas,
+halloween, burger, panda, noodle, pirate, space, cat, dog, weather,
+garden, arcade, slop, hotdog, stocks, team, random, counterstrike,
+mistakes, bike, car, traffic.
+
+<code>cs2</code> and <code>kynäri</code> are aliases for counterstrike.
+Random draws fresh win/loss/tie emoji each time.
+Choosing a theme for your own stats or form saves your preference.
+Without a theme, requests use the target player's saved preference."
     );
 }
 
