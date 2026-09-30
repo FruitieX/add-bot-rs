@@ -146,7 +146,7 @@ mod tests {
                     .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                     .unwrap();
                 let mut request = [0; 4096];
-                socket.read(&mut request).unwrap();
+                assert!(socket.read(&mut request).unwrap() > 0);
                 write!(
                     socket,
                     "HTTP/1.1 {status} Test\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx"

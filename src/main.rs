@@ -7,6 +7,7 @@ use teloxide::{prelude::Requester, types::Message, utils::client_from_env, Bot};
 mod bot;
 mod command;
 mod commands;
+mod delivery;
 mod services;
 mod settings;
 mod state;
@@ -26,11 +27,9 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let settings = settings::read_settings()?;
 
-    // Try restoring state from file, or default to empty state.
-    let sc = StateContainer::try_read_from_file().await?;
-
     let args = Args::parse();
-    let tz: Tz = args.tz.parse().unwrap();
+    let tz: Tz = args.tz.parse()?;
+    let sc = StateContainer::try_read_from_file(tz).await?;
 
     // Initialize the Telegram bot API.
     pretty_env_logger::init();
@@ -62,12 +61,18 @@ async fn main() -> Result<()> {
                     Ok(None) => {}
                     Err(error) => {
                         log::warn!("Command arguments rejected: {error}");
-                        util::send_msg(
+                        if let Err(error) = util::send_msg(
                             &bot,
-                            &message.chat.id,
+                            util::ReplyContext::from_message(&message),
                             &command::argument_error_response(msg_text, error.as_ref()),
                         )
-                        .await;
+                        .await
+                        {
+                            log::warn!(
+                                "Argument error reply failed: {}",
+                                crate::util::telegram_error_summary(&error)
+                            );
+                        }
                     }
                 }
             }

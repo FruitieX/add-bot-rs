@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo check
+      - run: cargo check --locked
 
   test:
     name: Test suite
@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo test
+      - run: cargo test --locked
 
   fmt:
     name: Rustfmt
@@ -43,10 +43,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --locked --all-targets -- -D warnings
 
   build:
     name: Build image
+    needs: [check, test, fmt, clippy]
     runs-on: ubuntu-latest
     concurrency:
       group: build-image-${{ github.ref }}
@@ -77,6 +78,7 @@ jobs:
           ADD_BOT_COMMIT: ${{ github.sha }}
 
       - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -123,5 +125,6 @@ jobs:
           client-payload: |
             {
               "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}",
-              "digest": "${{ steps.build.outputs.digest }}"
+              "digest": "${{ steps.build.outputs.digest }}",
+              "revision": "${{ github.sha }}"
             }

@@ -22,6 +22,56 @@ partial-history notice inside the image; entirely failed lookups retain the
 actual failure cause. Internal diagnostics stay in logs. Weather configuration
 errors ask an admin to set a location.
 
+## Queue reliability and delivery
+
+Queue and preference changes operate on the latest state under one lock. State
+is written to a temporary file in the same directory, synchronized, then
+atomically renamed over `state.json`; the directory is synchronized afterwards.
+Failed saves before replacement roll back the change. A failure after replacement
+reports that the change was saved but durability could not be confirmed.
+This supports one bot process using a writable state directory, including the
+homelab's single-replica `Recreate` deployment.
+
+A missing state file starts empty. Unreadable or malformed files and unsupported
+future schema versions stop startup and leave the existing file untouched;
+restore or repair that file before restarting. Existing files migrate in place,
+preserving players and icon preferences. Legacy timed queues without dates use
+their next local occurrence; legacy instant queues receive 30 minutes from
+migration because their original creation date is unavailable. Legacy queues
+cannot recover an original forum topic that was never stored.
+
+New queues store absolute UTC deadlines and the originating topic. Instant
+queues expire 30 minutes after creation; joins do not extend a queue's deadline.
+Timed queues use the next occurrence in the configured local calendar. During
+the autumn DST overlap, the first occurrence still in the future is chosen.
+Nonexistent spring times advance to the first valid minute. Overdue queues are
+processed after restarts or delayed polling instead of depending on an exact
+minute match. Recovery more than five minutes late announces expiry rather than
+claiming it is time to start playing.
+
+Queue acknowledgements are saved with each mutation and sent before historical
+analytics; prediction transitions are then added by editing the same message.
+Expiry notifications are saved in the same transaction that removes the queue.
+Pending notifications survive restart, respect Telegram rate-limit delays, and
+use capped backoff for transient failures. Queue expiry processing runs
+independently of slow Telegram requests. Text, charts, and errors preserve the
+originating topic and reply context; a deleted command message does not prevent
+delivery to its topic. Ordinary replies use bounded retries and return errors.
+
+Permanent delivery failures remain in `pending_notifications` with `blocked`
+set and a diagnostic in `last_failure`; they are not repeatedly retried. After
+fixing permissions or the destination, an admin can stop the bot, correct the
+entry, set `blocked` to false and `next_attempt` to a past timestamp, then restart.
+Removing an entry explicitly abandons that notification. Delayed notifications
+are labelled as such. Saved receipts prevent ordinary repeat delivery, but
+Telegram has no idempotency key: an ambiguous response or a crash after Telegram
+accepts a message and before its receipt is saved can still cause a duplicate.
+
+CI requires check, tests, formatting, and Clippy (including test code) before
+building the image. Pull requests build without registry login, publishing, or
+deployment. Main deployment dispatches the image digest and checked source
+commit; the binary and image labels also identify that commit.
+
 ## Queue and player output
 
 Queue updates use compact headers with active occupancy, separate reserve lists,

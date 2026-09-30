@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, NaiveTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, NaiveTime, Timelike, Utc};
 use chrono_tz::Tz;
 use futures::StreamExt;
 use teloxide::{types::ChatId, Bot};
@@ -12,55 +12,79 @@ use crate::{
     state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue, State, QUEUE_SIZE},
     state_container::StateContainer,
     types::{QueueId, SteamID, Username},
-    util::{fmt_naive_time, mk_queue_roster, mk_queue_status_msg, queue_occupancy, send_msg},
+    util::{fmt_naive_time, mk_queue_roster, mk_queue_status_msg, queue_occupancy, ReplyContext},
 };
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
 
-/// Called on timed out queues. Removes the chat queue and sends an
-/// informational Telegram message.
-async fn handle_queue_timeout(
-    sc: &StateContainer,
-    bot: &Bot,
-    chat_id: &ChatId,
-    queue_id: &QueueId,
-) -> Option<()> {
-    let state = sc.read().await;
-
-    // Remove chat queue and write new state.
-    let (state, removed_queue) = state.rm_chat_queue(chat_id, queue_id);
-    sc.write(state).await;
-
-    let removed_queue = removed_queue?;
-
-    // Inform players on Telegram about the timeout.
-    let text = format_queue_timeout(&removed_queue, queue_id);
-
-    send_msg(bot, chat_id, &text).await;
-
-    Some(())
+/// Remove overdue queues and enqueue their notification in the same commit.
+fn expire_due(state: &mut State, now: DateTime<Utc>, tz: Tz) {
+    let mut due = state
+        .chats
+        .iter()
+        .flat_map(|(chat_id, chat)| {
+            chat.queues.iter().filter_map(move |(id, queue)| {
+                queue
+                    .expires_at
+                    .filter(|deadline| *deadline <= now)
+                    .map(|deadline| (deadline, *chat_id, id.clone()))
+            })
+        })
+        .collect::<Vec<_>>();
+    due.sort_by_key(|(deadline, chat, id)| (*deadline, chat.0, id.to_string()));
+    for (deadline, chat_id, id) in due {
+        let (next, queue) = state.rm_chat_queue(&chat_id, &id);
+        *state = next;
+        if let Some(queue) = queue {
+            let context = queue.origin.unwrap_or(ReplyContext {
+                chat_id,
+                thread_id: None,
+                reply_to: None,
+            });
+            let text = if now - deadline > chrono::Duration::minutes(5) {
+                format!("⌛ Queue expired · Scheduled {}\n{}\nRecovered after a delay; this queue is now closed.", deadline.with_timezone(&tz).format("%d %b %H:%M"), mk_queue_roster(&queue, false))
+            } else {
+                format_queue_timeout(&queue, &id)
+            };
+            state.enqueue(context, text, now);
+        }
+    }
 }
 
-/// Task that polls and takes action for any queues that have timed out.
 pub async fn poll_for_timeouts(sc: StateContainer, tz: Tz, bot: Bot) {
-    loop {
-        let state = sc.read().await;
-        let t = fmt_naive_time(&Utc::now().with_timezone(&tz).time());
-
-        // Traverse all chat queues and look for timed out queues.
-        for (chat_id, chat) in &state.chats {
-            for (queue_id, queue) in &chat.queues {
-                // Note that we compare only HH:MM timestamps here and poll
-                // every second, so we shouldn't miss any timeouts.
-                if t == fmt_naive_time(&queue.timeout) {
-                    handle_queue_timeout(&sc, &bot, chat_id, queue_id).await;
-                }
+    let expiration = async {
+        loop {
+            let now = Utc::now();
+            if let Err(error) = sc
+                .transact(move |state| {
+                    expire_due(state, now, tz);
+                    Ok(())
+                })
+                .await
+            {
+                log::error!("Failed to expire queues: {error}");
             }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-
-        // Poll again after 1 second.
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await
-    }
+    };
+    let delivery =
+        async {
+            loop {
+                let now = Utc::now();
+                let state = sc.read().await;
+                for notification in state.pending_notifications.iter().filter(|notification| {
+                    !notification.blocked && notification.next_attempt <= now
+                }) {
+                    if let Err(error) =
+                        crate::delivery::deliver_pending(&bot, &sc, notification.id, false).await
+                    {
+                        log::error!("Failed to persist notification delivery: {error}");
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        };
+    tokio::join!(expiration, delivery);
 }
 
 /// Takes a sorted list of queues and returns human-readable strings with queue
@@ -73,9 +97,13 @@ fn queue_label(queue_id: &QueueId, queue: &Queue, now: DateTime<Tz>) -> String {
     let day = if start.date_naive() == now.date_naive() {
         "Today"
     } else {
-        "Tomorrow"
+        if start.date_naive() == now.date_naive() + chrono::Duration::days(1) {
+            "Tomorrow"
+        } else {
+            return start.format("%d %b %H:%M").to_string();
+        }
     };
-    format!("{day} {}", fmt_naive_time(&queue.timeout))
+    format!("{day} {}", fmt_naive_time(&start.time()))
 }
 
 fn format_queue_ready(
@@ -98,7 +126,7 @@ fn format_queue_timeout(queue: &Queue, queue_id: &QueueId) -> String {
     let label = if queue_id.is_instant_queue() {
         "Instant queue".to_string()
     } else {
-        queue_id.to_string()
+        fmt_naive_time(&queue.timeout)
     };
     if queue.is_full() {
         format_queue_ready(queue, &label, "It's time to play!", None)
@@ -126,157 +154,201 @@ fn make_queue_strings(queues: Vec<(QueueId, Queue)>, now: DateTime<Tz>) -> Vec<S
         .collect()
 }
 
-pub async fn add_remove(
-    settings: &Settings,
-    username: Username,
-    state: State,
-    chat_id: ChatId,
-    tz: &Tz,
-    time: Option<NaiveTime>,
-    sc: &StateContainer,
-) -> String {
-    // Current time without seconds
-    let t_now = NaiveTime::from_hms_opt(
-        Utc::now().with_timezone(tz).time().hour(),
-        Utc::now().with_timezone(tz).time().minute(),
-        0,
-    )
-    .unwrap();
+pub struct QueueChange {
+    pub notification_id: u64,
+    destination: ReplyContext,
+    transitions: Vec<(QueueId, Queue, Queue)>,
+    operation: AddRemovePlayerOp,
+}
 
-    // Construct queue_id, timeout and add_cmd based on whether command
-    // targeted a timed queue or not.
-    let (queue_id, timeout, add_cmd) = match time {
-        Some(time) if time != t_now => {
-            let queue_id = QueueId::new(fmt_naive_time(&time));
-            let add_cmd = time.format("/%H%M").to_string();
-            (queue_id, time, add_cmd)
-        }
-        // Catch current or missing minute commands and redirect to instant queue
-        _ => {
-            let queue_id = QueueId::new(String::from(""));
-            let timeout = Utc::now().with_timezone(tz).time()
-                + chrono::Duration::minutes(INSTANT_QUEUE_TIMEOUT_MINUTES);
-            let add_cmd = String::from("/add");
-            (queue_id, timeout, add_cmd)
-        }
-    };
-
-    let previous_queue = state
-        .chats
-        .get(&chat_id)
-        .and_then(|chat| chat.queues.get(&queue_id))
-        .cloned()
-        .unwrap_or_else(|| Queue::new(timeout, add_cmd.clone()));
-
-    // Add player and update state.
-    let (state, result, op) =
-        state.add_remove_player(&chat_id, &queue_id, add_cmd, timeout, username);
-    let new_queue = match &result {
-        AddRemovePlayerResult::QueueFull(queue)
-        | AddRemovePlayerResult::PlayerQueued(queue)
-        | AddRemovePlayerResult::QueueEmpty(queue) => queue.clone(),
-    };
-    let queue_states = vec![
-        (queue_id.clone(), previous_queue),
-        (queue_id.clone(), new_queue.clone()),
-    ];
-    sc.write(state).await;
-
-    let queue_predictions = predict_queue_states(
-        settings,
-        &queue_states,
-        services::leetify::RECENT_MATCHES_LIMIT,
-    )
-    .await;
-    let predicted_winrate = format_predicted_winrate_transition(
-        queue_predictions[0].predicted_winrate(),
-        queue_predictions[1].predicted_winrate(),
-    );
-
-    // Construct message based on whether the queue is now full or not.
-    match result {
-        AddRemovePlayerResult::QueueFull(queue) if queue_id.is_instant_queue() => {
-            format_queue_ready(
-                &queue,
-                "Instant queue",
-                "Ready to play!",
-                predicted_winrate.as_deref(),
-            )
-        }
-        AddRemovePlayerResult::PlayerQueued(queue)
-        | AddRemovePlayerResult::QueueFull(queue)
-        | AddRemovePlayerResult::QueueEmpty(queue) => mk_queue_status_msg(
-            &queue,
-            &queue_label(&queue_id, &queue, Utc::now().with_timezone(tz)),
-            &op,
-            predicted_winrate.as_deref(),
-        ),
+impl QueueChange {
+    fn format(&self, predictions: &[QueuePrediction], tz: Tz) -> String {
+        self.transitions
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _, queue))| {
+                let prediction = predictions
+                    .get(index * 2)
+                    .zip(predictions.get(index * 2 + 1))
+                    .and_then(|(before, after)| {
+                        format_predicted_winrate_transition(
+                            before.predicted_winrate(),
+                            after.predicted_winrate(),
+                        )
+                    });
+                if id.is_instant_queue() && queue.is_full() {
+                    format_queue_ready(
+                        queue,
+                        "Instant queue",
+                        "Ready to play!",
+                        prediction.as_deref(),
+                    )
+                } else {
+                    mk_queue_status_msg(
+                        queue,
+                        &queue_label(id, queue, Utc::now().with_timezone(&tz)),
+                        &self.operation,
+                        prediction.as_deref(),
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 }
 
-pub async fn remove_all(
-    settings: &Settings,
+pub async fn add_remove(
     username: Username,
-    state: State,
-    chat_id: ChatId,
+    destination: ReplyContext,
+    tz: Tz,
+    time: Option<NaiveTime>,
     sc: &StateContainer,
-    tz: &Tz,
-) -> String {
-    let previous_state = state.clone();
+) -> color_eyre::Result<QueueChange> {
+    let now = Utc::now();
+    let local = now.with_timezone(&tz);
+    let current_minute = NaiveTime::from_hms_opt(local.hour(), local.minute(), 0).unwrap();
+    let (id, deadline, command) = match time {
+        Some(time) if time != current_minute => (
+            QueueId::new(fmt_naive_time(&time)),
+            crate::state::next_local_deadline(time, local),
+            time.format("/%H%M").to_string(),
+        ),
+        _ => (
+            QueueId::new(String::new()),
+            now + chrono::Duration::minutes(INSTANT_QUEUE_TIMEOUT_MINUTES),
+            "/add".into(),
+        ),
+    };
+    sc.transact(move |state| {
+        expire_due(state, now, tz);
+        let before = state
+            .chats
+            .get(&destination.chat_id)
+            .and_then(|chat| chat.queues.get(&id))
+            .cloned()
+            .unwrap_or_else(|| Queue::new(deadline.with_timezone(&tz).time(), command.clone()));
+        let (mut next, result, operation) = state.add_remove_player(
+            &destination.chat_id,
+            &id,
+            command,
+            deadline.with_timezone(&tz).time(),
+            username,
+        );
+        let mut after = match result {
+            AddRemovePlayerResult::QueueFull(queue)
+            | AddRemovePlayerResult::PlayerQueued(queue)
+            | AddRemovePlayerResult::QueueEmpty(queue) => queue,
+        };
+        after.expires_at.get_or_insert(deadline);
+        after.origin.get_or_insert(destination);
+        if let Some(queue) = next
+            .chats
+            .get_mut(&destination.chat_id)
+            .and_then(|chat| chat.queues.get_mut(&id))
+        {
+            *queue = after.clone();
+        }
+        *state = next;
+        let mut change = QueueChange {
+            notification_id: 0,
+            destination,
+            transitions: vec![(id, before, after)],
+            operation,
+        };
+        change.notification_id = state.enqueue(destination, change.format(&[], tz), now);
+        Ok(change)
+    })
+    .await
+}
 
-    // Remove player and update state.
-    let (state, affected_queues) = state.rm_player(&chat_id, &username);
-    if affected_queues.is_empty() {
-        return "You’re not in any queues.".to_string();
-    }
-    let transitions = affected_queues
+pub async fn remove_all(
+    username: Username,
+    destination: ReplyContext,
+    sc: &StateContainer,
+    tz: Tz,
+) -> color_eyre::Result<Option<QueueChange>> {
+    let now = Utc::now();
+    sc.transact(move |state| {
+        expire_due(state, now, tz);
+        let previous = state.clone();
+        let (next, affected) = state.rm_player(&destination.chat_id, &username);
+        if affected.is_empty() {
+            return Ok(None);
+        }
+        let mut transitions = affected
+            .into_iter()
+            .filter_map(|(id, after)| {
+                previous
+                    .chats
+                    .get(&destination.chat_id)
+                    .and_then(|chat| chat.queues.get(&id))
+                    .cloned()
+                    .map(|before| (id, before, after))
+            })
+            .collect::<Vec<_>>();
+        transitions.sort_by_key(|(id, _, queue)| (queue.expires_at, id.to_string()));
+        *state = next;
+        let mut change = QueueChange {
+            notification_id: 0,
+            destination,
+            transitions,
+            operation: AddRemovePlayerOp::PlayerRemoved(username),
+        };
+        change.notification_id = state.enqueue(destination, change.format(&[], tz), now);
+        Ok(Some(change))
+    })
+    .await
+}
+
+/// Acknowledge committed queue changes before fetching analytics, then edit
+/// that same message to preserve the agreed prediction transition.
+pub async fn send_queue_change(
+    settings: &Settings,
+    sc: &StateContainer,
+    bot: &Bot,
+    change: QueueChange,
+    tz: Tz,
+) -> color_eyre::Result<()> {
+    let receipt = crate::delivery::deliver_pending(bot, sc, change.notification_id, true).await?;
+    let queues = change
+        .transitions
         .iter()
-        .filter_map(|(queue_id, new_queue)| {
-            previous_state
-                .chats
-                .get(&chat_id)
-                .and_then(|chat| chat.queues.get(queue_id))
-                .cloned()
-                .map(|previous_queue| (queue_id.clone(), previous_queue, new_queue.clone()))
-        })
+        .flat_map(|(id, before, after)| [(id.clone(), before.clone()), (id.clone(), after.clone())])
         .collect::<Vec<_>>();
-    let queue_states = transitions
-        .iter()
-        .flat_map(|(queue_id, previous_queue, new_queue)| {
-            [
-                (queue_id.clone(), previous_queue.clone()),
-                (queue_id.clone(), new_queue.clone()),
-            ]
+    let predictions =
+        predict_queue_states(settings, &queues, services::leetify::RECENT_MATCHES_LIMIT).await;
+    let text = change.format(&predictions, tz);
+    let id = change.notification_id;
+    let pending_text = text.clone();
+    // Serialize with delivery so an update cannot race an older payload send.
+    let _serial = sc.delivery_lock.lock().await;
+    let receipt = sc
+        .transact(move |state| {
+            if let Some(notification) = state
+                .pending_notifications
+                .iter_mut()
+                .find(|notification| notification.id == id)
+            {
+                notification.text = pending_text;
+            }
+            Ok(state
+                .notification_receipts
+                .iter()
+                .find(|receipt| receipt.id == id)
+                .map(|receipt| receipt.message_id))
         })
-        .collect::<Vec<_>>();
-    sc.write(state).await;
-
-    let queue_predictions = predict_queue_states(
-        settings,
-        &queue_states,
-        services::leetify::RECENT_MATCHES_LIMIT,
-    )
-    .await;
-
-    // Send queue status message for all affected queues.
-    transitions
-        .iter()
-        .enumerate()
-        .map(|(index, (queue_id, _, queue))| {
-            let prediction_index = index * 2;
-            let predicted_winrate = format_predicted_winrate_transition(
-                queue_predictions[prediction_index].predicted_winrate(),
-                queue_predictions[prediction_index + 1].predicted_winrate(),
+        .await?
+        .or(receipt);
+    drop(_serial);
+    if let Some(receipt) = receipt {
+        if let Err(error) = crate::util::edit_msg(bot, change.destination, receipt, &text).await {
+            log::warn!(
+                "Prediction edit failed; queue acknowledgement remains delivered: {}",
+                crate::util::telegram_error_summary(&error)
             );
-            mk_queue_status_msg(
-                queue,
-                &queue_label(queue_id, queue, Utc::now().with_timezone(tz)),
-                &AddRemovePlayerOp::PlayerRemoved(username.clone()),
-                predicted_winrate.as_deref(),
-            )
-        })
-        .collect::<Vec<String>>()
-        .join("\n\n")
+        }
+    }
+    Ok(())
 }
 
 pub fn list(state: State, chat_id: ChatId, tz: &Tz) -> String {
@@ -836,18 +908,12 @@ pub(crate) fn queue_start_at(
         return now;
     }
 
-    let scheduled = now.date_naive().and_time(queue.timeout);
-    let scheduled = now
-        .timezone()
-        .from_local_datetime(&scheduled)
-        .earliest()
-        .unwrap_or(now);
-
-    if scheduled < now {
-        scheduled + chrono::Duration::days(1)
-    } else {
-        scheduled
-    }
+    queue
+        .expires_at
+        .map(|deadline| deadline.with_timezone(&now.timezone()))
+        .unwrap_or_else(|| {
+            crate::state::next_local_deadline(queue.timeout, now).with_timezone(&now.timezone())
+        })
 }
 
 async fn predict_queue_states(
@@ -1026,6 +1092,215 @@ pub async fn predictions(
 mod tests {
     use super::*;
     use chrono::{Duration, TimeZone};
+
+    #[tokio::test]
+    async fn overdue_queue_recovery_is_atomic_dated_and_keeps_its_topic() {
+        let (sc, directory) = crate::state_container::test_store().await;
+        let now = Utc::now();
+        let context = ReplyContext {
+            chat_id: ChatId(1),
+            thread_id: Some(teloxide::types::ThreadId(teloxide::types::MessageId(7))),
+            reply_to: None,
+        };
+        sc.transact(move |state| {
+            let mut queue = Queue::new(NaiveTime::from_hms_opt(20, 0, 0).unwrap(), "/2000".into());
+            queue.insert_player(Username::new("Alice".into()));
+            queue.expires_at = Some(now - Duration::hours(2));
+            queue.origin = Some(context);
+            state
+                .chats
+                .entry(ChatId(1))
+                .or_default()
+                .queues
+                .insert(QueueId::new("20:00".into()), queue);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let restored = StateContainer::load(
+            directory.0.join("state.json"),
+            chrono_tz::Europe::Helsinki,
+            now,
+        )
+        .await
+        .unwrap();
+        restored
+            .transact(move |state| {
+                expire_due(state, now, chrono_tz::Europe::Helsinki);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let state = restored.read().await;
+        assert!(state.chats[&ChatId(1)].queues.is_empty());
+        assert_eq!(state.pending_notifications.len(), 1);
+        assert_eq!(
+            state.pending_notifications[0].destination.thread_id,
+            context.thread_id
+        );
+        assert!(state.pending_notifications[0]
+            .text
+            .contains("Recovered after a delay"));
+        assert!(!state.pending_notifications[0]
+            .text
+            .contains("It's time to play"));
+        restored
+            .transact(move |state| {
+                expire_due(
+                    state,
+                    now + Duration::minutes(1),
+                    chrono_tz::Europe::Helsinki,
+                );
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(restored.read().await.pending_notifications.len(), 1);
+        let disk: State =
+            serde_json::from_slice(&std::fs::read(directory.0.join("state.json")).unwrap())
+                .unwrap();
+        assert!(disk == restored.read().await);
+    }
+
+    #[tokio::test]
+    async fn joins_and_leaves_use_latest_state_and_keep_the_original_deadline() {
+        let (sc, _directory) = crate::state_container::test_store().await;
+        let destination = ReplyContext {
+            chat_id: ChatId(1),
+            thread_id: None,
+            reply_to: None,
+        };
+        let time = (Utc::now() + Duration::hours(2))
+            .time()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
+        let first = add_remove(
+            Username::new("Alice".into()),
+            destination,
+            chrono_tz::UTC,
+            Some(time),
+            &sc,
+        )
+        .await
+        .unwrap();
+        let deadline = first.transitions[0].2.expires_at;
+        let bob = add_remove(
+            Username::new("Bob".into()),
+            destination,
+            chrono_tz::UTC,
+            Some(time),
+            &sc,
+        )
+        .await
+        .unwrap();
+        assert_eq!(bob.transitions[0].1.num_players(), 1);
+        assert_eq!(bob.transitions[0].2.num_players(), 2);
+        assert_eq!(bob.transitions[0].2.expires_at, deadline);
+        let removed = remove_all(
+            Username::new("Alice".into()),
+            destination,
+            &sc,
+            chrono_tz::UTC,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            removed.transitions[0].2.get_players().0,
+            vec![Username::new("Bob".into())]
+        );
+        assert_eq!(removed.transitions[0].2.expires_at, deadline);
+        assert_eq!(sc.read().await.pending_notifications.len(), 3);
+    }
+
+    #[test]
+    fn stored_deadlines_do_not_roll_to_tomorrow_after_the_scheduled_time() {
+        let tz = chrono_tz::Europe::Helsinki;
+        let scheduled = tz.with_ymd_and_hms(2026, 10, 25, 19, 30, 0).unwrap();
+        let mut queue = Queue::new(scheduled.time(), "/1930".into());
+        queue.expires_at = Some(scheduled.with_timezone(&Utc));
+        let later = scheduled + Duration::hours(2);
+        assert_eq!(
+            queue_start_at(&QueueId::new("19:30".into()), &queue, later),
+            scheduled
+        );
+    }
+
+    #[tokio::test]
+    async fn simultaneous_join_leave_preference_and_expiry_preserve_unrelated_updates() {
+        let (sc, _directory) = crate::state_container::test_store().await;
+        let now = Utc::now();
+        let destination = ReplyContext {
+            chat_id: ChatId(1),
+            thread_id: None,
+            reply_to: None,
+        };
+        let time = (now + Duration::hours(2))
+            .time()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
+        sc.transact(move |state| {
+            let mut old = Queue::new(NaiveTime::from_hms_opt(9, 0, 0).unwrap(), "/0900".into());
+            old.insert_player(Username::new("Past".into()));
+            old.expires_at = Some(now - Duration::minutes(1));
+            let mut active = Queue::new(time, time.format("/%H%M").to_string());
+            active.insert_player(Username::new("Bob".into()));
+            active.expires_at = Some(now + Duration::hours(2));
+            let chat = state.chats.entry(ChatId(1)).or_default();
+            chat.queues.insert(QueueId::new("expired".into()), old);
+            chat.queues
+                .insert(QueueId::new(fmt_naive_time(&time)), active);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let alice = Username::new("Alice".into());
+        let (join, leave, preference, expiry) = tokio::join!(
+            add_remove(alice.clone(), destination, chrono_tz::UTC, Some(time), &sc),
+            remove_all(
+                Username::new("Bob".into()),
+                destination,
+                &sc,
+                chrono_tz::UTC
+            ),
+            sc.resolve_recent_form_options(
+                Some(&alice),
+                &alice,
+                crate::command::RecentFormOptions {
+                    style: crate::command::RecentFormStyle::Moon,
+                    explicit_style: true,
+                    ..Default::default()
+                }
+            ),
+            sc.transact(move |state| {
+                expire_due(state, now, chrono_tz::UTC);
+                Ok(())
+            }),
+        );
+        join.unwrap();
+        leave.unwrap();
+        preference.unwrap();
+        expiry.unwrap();
+        let state = sc.read().await;
+        assert!(!state.chats[&ChatId(1)]
+            .queues
+            .contains_key(&QueueId::new("expired".into())));
+        assert_eq!(
+            state.chats[&ChatId(1)].queues[&QueueId::new(fmt_naive_time(&time))]
+                .get_players()
+                .0,
+            vec![alice]
+        );
+        assert_eq!(
+            state.recent_form_styles[&Username::new("alice".into())],
+            crate::command::RecentFormStyle::Moon
+        );
+        assert_eq!(state.pending_notifications.len(), 3);
+    }
 
     #[test]
     fn queue_listing_uses_blocks_and_distinguishes_today_tomorrow_and_instant() {

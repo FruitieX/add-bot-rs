@@ -13,7 +13,7 @@ use crate::{
     },
     settings::Settings,
     state_container::StateContainer,
-    util::{mk_username, send_msg, send_photo},
+    util::{mk_username, send_msg, send_photo, ReplyContext},
 };
 
 use chrono_tz::Tz;
@@ -43,7 +43,10 @@ pub async fn handle_cmd(
                 request = request.message_thread_id(thread_id);
             }
             if let Err(error) = request.await {
-                log::warn!("Failed to send typing status for {chat_id}: {error}");
+                log::warn!(
+                    "Failed to send typing status for {chat_id}: {}",
+                    crate::util::telegram_error_summary(&error)
+                );
             }
         }
     };
@@ -66,6 +69,7 @@ async fn handle_cmd_inner(
     cmd: Command,
 ) -> Option<()> {
     let state = sc.read().await;
+    let destination = ReplyContext::from_message(&msg);
     let chat_id = msg.chat.id;
     let user = msg.from?;
 
@@ -75,11 +79,40 @@ async fn handle_cmd_inner(
         Command::Version => crate::command::version(),
         Command::AddRemove { time, for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
-            add_remove(&settings, username, state, chat_id, &tz, time, &sc).await
+            match add_remove(username, destination, tz, time, &sc).await {
+                Ok(change) => {
+                    if let Err(error) =
+                        crate::commands::queue::send_queue_change(&settings, &sc, &bot, change, tz)
+                            .await
+                    {
+                        log::error!("Queue delivery/update failed: {error}");
+                    }
+                    return Some(());
+                }
+                Err(error) => {
+                    log::error!("Queue change failed: {error}");
+                    crate::state_container::save_failure_message(&error).to_owned()
+                }
+            }
         }
         Command::RemoveAll => {
             let username = mk_username(&user);
-            remove_all(&settings, username, state, chat_id, &sc, &tz).await
+            match remove_all(username, destination, &sc, tz).await {
+                Ok(Some(change)) => {
+                    if let Err(error) =
+                        crate::commands::queue::send_queue_change(&settings, &sc, &bot, change, tz)
+                            .await
+                    {
+                        log::error!("Queue delivery/update failed: {error}");
+                    }
+                    return Some(());
+                }
+                Ok(None) => "You’re not in any queues.".into(),
+                Err(error) => {
+                    log::error!("Queue change failed: {error}");
+                    crate::state_container::save_failure_message(&error).to_owned()
+                }
+            }
         }
         Command::List => list(state, chat_id, &tz),
         Command::Predictions { match_count } => {
@@ -97,6 +130,25 @@ async fn handle_cmd_inner(
             let form_options = sc
                 .resolve_recent_form_options(requester.as_ref(), &username, form_options)
                 .await;
+            let form_options = match form_options {
+                Ok(options) => options,
+                Err(error) => {
+                    log::error!("Preference save failed: {error}");
+                    if let Err(error) = send_msg(
+                        &bot,
+                        destination,
+                        crate::state_container::save_failure_message(&error),
+                    )
+                    .await
+                    {
+                        log::warn!(
+                            "Preference error reply failed: {}",
+                            crate::util::telegram_error_summary(&error)
+                        );
+                    }
+                    return Some(());
+                }
+            };
             stats(&settings, &username, form_options).await
         }
         Command::RecentForm {
@@ -111,6 +163,25 @@ async fn handle_cmd_inner(
             let form_options = sc
                 .resolve_recent_form_options(requester.as_ref(), &username, form_options)
                 .await;
+            let form_options = match form_options {
+                Ok(options) => options,
+                Err(error) => {
+                    log::error!("Preference save failed: {error}");
+                    if let Err(error) = send_msg(
+                        &bot,
+                        destination,
+                        crate::state_container::save_failure_message(&error),
+                    )
+                    .await
+                    {
+                        log::warn!(
+                            "Preference error reply failed: {}",
+                            crate::util::telegram_error_summary(&error)
+                        );
+                    }
+                    return Some(());
+                }
+            };
             recent_form(&settings, &username, form_options).await
         }
         Command::LastPlayed { for_user } => {
@@ -126,17 +197,28 @@ async fn handle_cmd_inner(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch price chart: {}", e);
-                    send_msg(
+                    if let Err(error) = send_msg(
                         &bot,
-                        &chat_id,
+                        destination,
                         &crate::services::failure::message(&e, "Electricity chart", "/el"),
                     )
-                    .await;
+                    .await
+                    {
+                        log::warn!(
+                            "Chart error reply failed: {}",
+                            crate::util::telegram_error_summary(&error)
+                        );
+                    }
                     return Some(());
                 }
             };
 
-            send_photo(&bot, &chat_id, photo).await;
+            if let Err(error) = send_photo(&bot, destination, photo).await {
+                log::warn!(
+                    "Chart delivery failed: {}",
+                    crate::util::telegram_error_summary(&error)
+                );
+            }
             return Some(());
         }
         Command::Activity { for_user, style } => {
@@ -145,17 +227,28 @@ async fn handle_cmd_inner(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch activity chart: {}", e);
-                    send_msg(
+                    if let Err(error) = send_msg(
                         &bot,
-                        &chat_id,
+                        destination,
                         &crate::services::failure::message(&e, "Activity chart", "/activity"),
                     )
-                    .await;
+                    .await
+                    {
+                        log::warn!(
+                            "Chart error reply failed: {}",
+                            crate::util::telegram_error_summary(&error)
+                        );
+                    }
                     return Some(());
                 }
             };
 
-            send_photo(&bot, &chat_id, photo).await;
+            if let Err(error) = send_photo(&bot, destination, photo).await {
+                log::warn!(
+                    "Chart delivery failed: {}",
+                    crate::util::telegram_error_summary(&error)
+                );
+            }
             return Some(());
         }
         Command::Results { for_user } => {
@@ -163,24 +256,40 @@ async fn handle_cmd_inner(
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch results chart: {}", e);
-                    send_msg(
+                    if let Err(error) = send_msg(
                         &bot,
-                        &chat_id,
+                        destination,
                         &crate::services::failure::message(&e, "Results chart", "/results"),
                     )
-                    .await;
+                    .await
+                    {
+                        log::warn!(
+                            "Chart error reply failed: {}",
+                            crate::util::telegram_error_summary(&error)
+                        );
+                    }
                     return Some(());
                 }
             };
 
-            send_photo(&bot, &chat_id, photo).await;
+            if let Err(error) = send_photo(&bot, destination, photo).await {
+                log::warn!(
+                    "Chart delivery failed: {}",
+                    crate::util::telegram_error_summary(&error)
+                );
+            }
             return Some(());
         }
         Command::StatLeaderboard { stat_type } => stat_leaderboard(&settings, stat_type).await,
         Command::TeamFlash => team_flash_leaderboard(&settings).await,
     };
 
-    send_msg(&bot, &chat_id, &text).await;
+    if let Err(error) = send_msg(&bot, destination, &text).await {
+        log::warn!(
+            "Command reply failed: {}",
+            crate::util::telegram_error_summary(&error)
+        );
+    }
 
     Some(())
 }

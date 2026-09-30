@@ -3,11 +3,12 @@ use crate::{
     types::Username,
 };
 use chrono::NaiveTime;
+use serde::{Deserialize, Serialize};
 use teloxide::{
-    payloads::SendMessageSetters,
+    payloads::{EditMessageTextSetters, SendMessageSetters, SendPhotoSetters},
     prelude::{Request, Requester},
-    types::{ChatId, InputFile, ParseMode, User},
-    Bot,
+    types::{ChatId, InputFile, Message, MessageId, ParseMode, ReplyParameters, ThreadId, User},
+    ApiError, Bot, RequestError,
 };
 
 /// Tries in order to extract a user's:
@@ -32,25 +33,141 @@ pub fn fmt_naive_time(t: &NaiveTime) -> String {
     t.format("%H:%M").to_string()
 }
 
-/// Helper for sending Telegram messages (and logging errors to stderr).
-pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str) {
-    let request = bot.send_message(*chat_id, text).parse_mode(ParseMode::Html);
-
-    let res = request.send().await;
-
-    if let Err(error) = res {
-        eprintln!("Error while sending Telegram message: {}", error);
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReplyContext {
+    pub chat_id: ChatId,
+    pub thread_id: Option<ThreadId>,
+    pub reply_to: Option<MessageId>,
+}
+impl ReplyContext {
+    pub fn from_message(message: &Message) -> Self {
+        Self {
+            chat_id: message.chat.id,
+            thread_id: message.thread_id,
+            reply_to: Some(message.id),
+        }
     }
 }
 
-/// Helper for sending Telegram photo (and logging errors to stderr).
-pub async fn send_photo(bot: &Bot, chat_id: &ChatId, photo: InputFile) {
-    let request = bot.send_photo(*chat_id, photo);
+pub fn telegram_retry_delay(error: &RequestError, attempt: u32) -> Option<std::time::Duration> {
+    let seconds = match error {
+        RequestError::RetryAfter(seconds) => seconds.seconds().max(1) as u64,
+        RequestError::Network(error)
+            if error.status().is_none_or(|status| status.is_server_error()) =>
+        {
+            2u64.pow(attempt.min(9)).min(300)
+        }
+        RequestError::InvalidJson { .. } => 2u64.pow(attempt.min(9)).min(300),
+        RequestError::Api(ApiError::Unknown(message))
+            if ["Internal Server Error", "Bad Gateway", "Gateway Timeout"]
+                .iter()
+                .any(|text| message.contains(text)) =>
+        {
+            2u64.pow(attempt.min(9)).min(300)
+        }
+        _ => return None,
+    };
+    Some(std::time::Duration::from_secs(seconds))
+}
 
-    let res = request.send().await;
+/// Keep credentials and raw responses out of delivery diagnostics and state.
+pub fn telegram_error_summary(error: &RequestError) -> String {
+    match error {
+        RequestError::Network(error) if error.is_timeout() => "Telegram request timed out".into(),
+        RequestError::Network(error) if error.is_connect() => "Telegram connection failed".into(),
+        RequestError::Network(error) => {
+            format!("Telegram network failure (status={:?})", error.status())
+        }
+        RequestError::InvalidJson { .. } => "Invalid Telegram response".into(),
+        RequestError::RetryAfter(seconds) => format!(
+            "Telegram rate limit; retry after {} seconds",
+            seconds.seconds()
+        ),
+        RequestError::Api(error) => error.to_string(),
+        RequestError::MigrateToChatId(chat) => {
+            format!("Telegram group migrated to {chat}; destination needs updating")
+        }
+        RequestError::Io(_) => "Telegram upload I/O failure".into(),
+    }
+}
 
-    if let Err(error) = res {
-        eprintln!("Error while sending Telegram photo message: {}", error);
+async fn retry_request<T, F: std::future::Future<Output = Result<T, RequestError>>>(
+    mut request: impl FnMut() -> F,
+) -> Result<T, RequestError> {
+    for attempt in 0..3 {
+        match request().await {
+            Ok(result) => return Ok(result),
+            Err(error) => match telegram_retry_delay(&error, attempt + 1)
+                .filter(|delay| delay.as_secs() <= 30 && attempt < 2)
+            {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => return Err(error),
+            },
+        }
+    }
+    unreachable!()
+}
+
+pub async fn send_msg_once(
+    bot: &Bot,
+    destination: ReplyContext,
+    text: &str,
+) -> Result<Message, RequestError> {
+    let mut request = bot
+        .send_message(destination.chat_id, text)
+        .parse_mode(ParseMode::Html);
+    if let Some(thread) = destination.thread_id {
+        request = request.message_thread_id(thread);
+    }
+    if let Some(reply) = destination.reply_to {
+        request =
+            request.reply_parameters(ReplyParameters::new(reply).allow_sending_without_reply());
+    }
+    request.send().await
+}
+
+pub async fn send_msg(
+    bot: &Bot,
+    destination: ReplyContext,
+    text: &str,
+) -> Result<Message, RequestError> {
+    retry_request(|| send_msg_once(bot, destination, text)).await
+}
+
+pub async fn send_photo(
+    bot: &Bot,
+    destination: ReplyContext,
+    photo: InputFile,
+) -> Result<Message, RequestError> {
+    retry_request(|| {
+        let mut request = bot.send_photo(destination.chat_id, photo.clone());
+        if let Some(thread) = destination.thread_id {
+            request = request.message_thread_id(thread);
+        }
+        if let Some(reply) = destination.reply_to {
+            request =
+                request.reply_parameters(ReplyParameters::new(reply).allow_sending_without_reply());
+        }
+        request.send()
+    })
+    .await
+}
+
+pub async fn edit_msg(
+    bot: &Bot,
+    destination: ReplyContext,
+    id: MessageId,
+    text: &str,
+) -> Result<(), RequestError> {
+    match retry_request(|| {
+        bot.edit_message_text(destination.chat_id, id, text)
+            .parse_mode(ParseMode::Html)
+            .send()
+    })
+    .await
+    {
+        Ok(_) | Err(RequestError::Api(ApiError::MessageNotModified)) => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -147,6 +264,139 @@ pub fn escape_html(text: &str) -> String {
 mod tests {
     use super::*;
     use chrono::NaiveTime;
+
+    fn telegram_fixture() -> (Bot, std::thread::JoinHandle<(String, Vec<u8>)>) {
+        use std::io::{BufRead, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = std::io::BufReader::new(&mut socket);
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                headers.push_str(&line);
+            }
+            let lower = headers.to_ascii_lowercase();
+            let mut body = Vec::new();
+            if let Some(length) = lower
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:").map(str::trim))
+            {
+                body.resize(length.parse().unwrap(), 0);
+                reader.read_exact(&mut body).unwrap();
+            } else if lower.contains("transfer-encoding: chunked") {
+                loop {
+                    let mut size = String::new();
+                    reader.read_line(&mut size).unwrap();
+                    let size =
+                        usize::from_str_radix(size.trim().split(';').next().unwrap(), 16).unwrap();
+                    if size == 0 {
+                        break;
+                    }
+                    let offset = body.len();
+                    body.resize(offset + size, 0);
+                    reader.read_exact(&mut body[offset..]).unwrap();
+                    let mut newline = [0; 2];
+                    reader.read_exact(&mut newline).unwrap();
+                }
+            }
+            drop(reader);
+            let response = r#"{"ok":true,"result":{"message_id":23,"date":0,"chat":{"id":1,"type":"private","first_name":"Test"},"text":"ok"}}"#;
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+            (headers, body)
+        });
+        let client = teloxide::net::default_reqwest_settings()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap();
+        let bot = Bot::with_client("123:LOCAL_TEST", client)
+            .set_api_url(reqwest::Url::parse(&format!("http://{address}")).unwrap());
+        (bot, server)
+    }
+
+    #[tokio::test]
+    async fn text_delivery_passes_topic_and_reply_context_to_telegram() {
+        let (bot, server) = telegram_fixture();
+        let destination = ReplyContext {
+            chat_id: ChatId(1),
+            thread_id: Some(ThreadId(MessageId(7))),
+            reply_to: Some(MessageId(12)),
+        };
+        assert_eq!(
+            send_msg(&bot, destination, "<b>Hello</b>")
+                .await
+                .unwrap()
+                .id,
+            MessageId(23)
+        );
+        let (_, body) = server.join().unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["message_thread_id"], 7);
+        assert_eq!(payload["reply_parameters"]["message_id"], 12);
+        assert_eq!(
+            payload["reply_parameters"]["allow_sending_without_reply"],
+            true
+        );
+        assert_eq!(payload["parse_mode"], "HTML");
+    }
+
+    #[tokio::test]
+    async fn chart_delivery_passes_topic_and_reply_context_to_telegram() {
+        let (bot, server) = telegram_fixture();
+        let destination = ReplyContext {
+            chat_id: ChatId(1),
+            thread_id: Some(ThreadId(MessageId(7))),
+            reply_to: Some(MessageId(12)),
+        };
+        send_photo(&bot, destination, InputFile::memory(vec![1, 2, 3]))
+            .await
+            .unwrap();
+        let (_, body) = server.join().unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("name=\"message_thread_id\"\r\n\r\n7"));
+        assert!(body.contains("name=\"reply_parameters\""));
+        assert!(body.contains("\"message_id\":12"));
+        assert!(body.contains("\"allow_sending_without_reply\":true"));
+    }
+
+    #[test]
+    fn retry_policy_respects_rate_limits_and_does_not_retry_permanent_errors() {
+        assert_eq!(
+            telegram_retry_delay(
+                &RequestError::RetryAfter(teloxide::types::Seconds::from_seconds(40)),
+                1
+            )
+            .unwrap()
+            .as_secs(),
+            40
+        );
+        assert_eq!(
+            telegram_retry_delay(
+                &RequestError::Api(ApiError::Unknown("Internal Server Error".into())),
+                50
+            )
+            .unwrap()
+            .as_secs(),
+            300
+        );
+        assert_eq!(
+            telegram_retry_delay(&RequestError::Api(ApiError::BotBlocked), 1),
+            None
+        );
+        assert_eq!(
+            telegram_retry_delay(&RequestError::Api(ApiError::MessageNotModified), 1),
+            None
+        );
+    }
 
     #[test]
     fn queue_status_uses_dense_predicted_winrate_transition() {
