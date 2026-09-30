@@ -1,7 +1,12 @@
 use chrono::Utc;
 use chrono_tz::Tz;
 
-use crate::{services, settings::Settings, types::Username};
+use crate::{
+    command::{RecentFormOptions, RecentFormStyle},
+    services,
+    settings::Settings,
+    types::Username,
+};
 
 fn index_to_pos(index: usize) -> String {
     match index {
@@ -165,9 +170,10 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
     }
 }
 
-fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> String {
-    const RESULTS_PER_ROW: usize = 10;
-
+fn format_recent_results_with_options(
+    recent_matches: &[services::leetify::RecentMatch],
+    form_options: RecentFormOptions,
+) -> String {
     // The profile endpoint returns its recent_matches collection newest first.
     // Keep the same order for the form display and calculate all counts from
     // only the configured recent-match window.
@@ -193,16 +199,37 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     } else {
         wins as f32 / (wins + losses) as f32 * 100.0
     };
+    let result_marker = |result: &services::leetify::MatchResult| match (form_options.style, result)
+    {
+        (RecentFormStyle::Squares, services::leetify::MatchResult::Win) => "🟩",
+        (RecentFormStyle::Squares, services::leetify::MatchResult::Loss) => "🟥",
+        (RecentFormStyle::Squares, services::leetify::MatchResult::Tie) => "🟨",
+        (RecentFormStyle::Letters, services::leetify::MatchResult::Win) => "W",
+        (RecentFormStyle::Letters, services::leetify::MatchResult::Loss) => "L",
+        (RecentFormStyle::Letters, services::leetify::MatchResult::Tie) => "T",
+        (RecentFormStyle::Trophy, services::leetify::MatchResult::Win) => "🏆",
+        (RecentFormStyle::Trophy, services::leetify::MatchResult::Loss) => "💀",
+        (RecentFormStyle::Trophy, services::leetify::MatchResult::Tie) => "👔",
+        (RecentFormStyle::Drama, services::leetify::MatchResult::Win) => "🎉",
+        (RecentFormStyle::Drama, services::leetify::MatchResult::Loss) => "🪦",
+        (RecentFormStyle::Drama, services::leetify::MatchResult::Tie) => "🤝",
+        (RecentFormStyle::Mood, services::leetify::MatchResult::Win) => "😎",
+        (RecentFormStyle::Mood, services::leetify::MatchResult::Loss) => "😭",
+        (RecentFormStyle::Mood, services::leetify::MatchResult::Tie) => "😐",
+    };
+    let legend = match form_options.style {
+        RecentFormStyle::Squares => "🟩 win · 🟥 loss · 🟨 tie",
+        RecentFormStyle::Letters => "W win · L loss · T tie",
+        RecentFormStyle::Trophy => "🏆 win · 💀 loss · 👔 tie",
+        RecentFormStyle::Drama => "🎉 win · 🪦 loss · 🤝 tie",
+        RecentFormStyle::Mood => "😎 win · 😭 loss · 😐 tie",
+    };
     let results = recent_matches
         .iter()
-        .map(|m| match &m.result {
-            services::leetify::MatchResult::Win => "🟩",
-            services::leetify::MatchResult::Loss => "🟥",
-            services::leetify::MatchResult::Tie => "🟨",
-        })
+        .map(|m| result_marker(&m.result))
         .collect::<Vec<_>>()
-        .chunks(RESULTS_PER_ROW)
-        .map(|row| row.join(" "))
+        .chunks(form_options.results_per_row)
+        .map(|row| row.join(""))
         .collect::<Vec<_>>()
         .join("\n");
     let results = if results.is_empty() {
@@ -212,7 +239,7 @@ fn format_recent_results(recent_matches: &[services::leetify::RecentMatch]) -> S
     };
 
     format!(
-        "<pre>{results}</pre>\n<b>{wins}W / {losses}L / {ties}T</b> · <b>{win_percentage:.0}% win rate</b>"
+        "<i>{legend}</i>\n<pre>{results}</pre>\n<b>{wins}W / {losses}L / {ties}T</b> · <b>{win_percentage:.0}% win rate</b>"
     )
 }
 
@@ -245,7 +272,11 @@ fn format_teammate_stats(stats: &services::leetify::TeammateStats) -> String {
     format!("<b>Best:</b> {best_win_rates}\n<b>Worst:</b> {worst_win_rates}")
 }
 
-pub async fn stats(settings: &Settings, username: &Username) -> String {
+pub async fn stats(
+    settings: &Settings,
+    username: &Username,
+    form_options: RecentFormOptions,
+) -> String {
     let res = services::leetify::player_stats(settings, username).await;
 
     match res {
@@ -272,7 +303,8 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
                 .and_then(|r| r.skill_level)
                 .map(|r| r.to_string())
                 .unwrap_or("N/A".to_string());
-            let recent_results = format_recent_results(&stats.recent_matches);
+            let recent_results =
+                format_recent_results_with_options(&stats.recent_matches, form_options);
             let teammate_stats = match services::leetify::teammate_stats(settings, username).await {
                 Ok(teammate_stats) => format_teammate_stats(&teammate_stats),
                 Err(e) => {
@@ -304,6 +336,23 @@ pub async fn stats(settings: &Settings, username: &Username) -> String {
         Err(e) => {
             eprintln!("Failed to fetch player stats from Leetify: {}", e);
             "Failed to fetch player stats from Leetify".to_string()
+        }
+    }
+}
+
+pub async fn recent_form(
+    settings: &Settings,
+    username: &Username,
+    form_options: RecentFormOptions,
+) -> String {
+    match services::leetify::player_stats(settings, username).await {
+        Ok(profile) => format!(
+            "<b>Recent form for {username}</b> <i>(latest → oldest)</i>\n{}",
+            format_recent_results_with_options(&profile.recent_matches, form_options)
+        ),
+        Err(error) => {
+            eprintln!("Failed to fetch recent form from Leetify: {error}");
+            "Failed to fetch recent form from Leetify".to_string()
         }
     }
 }
@@ -437,8 +486,8 @@ mod tests {
         ];
 
         assert_eq!(
-            format_recent_results(&results),
-            "<pre>🟩 🟥 🟩 🟨</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
+            format_recent_results_with_options(&results, RecentFormOptions::default()),
+            "<i>🟩 win · 🟥 loss · 🟨 tie</i>\n<pre>🟩🟥🟩🟨</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>"
         );
     }
 
@@ -447,8 +496,8 @@ mod tests {
         let results = vec![result(MatchResult::Tie)];
 
         assert_eq!(
-            format_recent_results(&results),
-            "<pre>🟨</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
+            format_recent_results_with_options(&results, RecentFormOptions::default()),
+            "<i>🟩 win · 🟥 loss · 🟨 tie</i>\n<pre>🟨</pre>\n<b>0W / 0L / 1T</b> · <b>0% win rate</b>"
         );
     }
 
@@ -471,8 +520,8 @@ mod tests {
         results.extend((0..4).map(|_| result(MatchResult::Tie)));
 
         assert_eq!(
-            format_recent_results(&results),
-            "<pre>🟩 🟥 🟨 🟩 🟥 🟩 🟥 🟩 🟥 🟩\n🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩\n🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩 🟩</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
+            format_recent_results_with_options(&results, RecentFormOptions::default()),
+            "<i>🟩 win · 🟥 loss · 🟨 tie</i>\n<pre>🟩🟥🟨🟩🟥🟩🟥🟩🟥🟩\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩</pre>\n<b>25W / 4L / 1T</b> · <b>86% win rate</b>"
         );
     }
 }

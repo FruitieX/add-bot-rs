@@ -6,7 +6,7 @@ use crate::{
         results::get_results_inputfile,
         sahko::{get_sahko_inputfile, queue_cost_message},
         stats::{
-            hall_of_fame, hall_of_shame, last_played, stat_leaderboard, stats,
+            hall_of_fame, hall_of_shame, last_played, recent_form, stat_leaderboard, stats,
             team_flash_leaderboard,
         },
         weather::{temperature, weather as weather_report},
@@ -48,9 +48,19 @@ pub async fn handle_cmd(
         Command::Predictions { match_count } => {
             predictions(&settings, state, chat_id, &tz, match_count).await
         }
-        Command::Stats { for_user } => {
+        Command::Stats {
+            for_user,
+            form_options,
+        } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
-            stats(&settings, &username).await
+            stats(&settings, &username, form_options).await
+        }
+        Command::RecentForm {
+            for_user,
+            form_options,
+        } => {
+            let username = for_user.unwrap_or_else(|| mk_username(&user));
+            recent_form(&settings, &username, form_options).await
         }
         Command::LastPlayed { for_user } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));

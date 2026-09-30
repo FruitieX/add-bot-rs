@@ -18,7 +18,8 @@ The following commands are supported:
                 Predicted win rates for current queues, using the latest 30 matches by default.
 - /rm           Remove yourself from all queues.
 - /lastplayed   Last played game stats for player.
-- /stats        Leetify stats for player.
+- /stats        Leetify stats with optional recent-form style and row width.
+- /form         Recent match form only, with optional style and row width.
 - /halloffame   Top 10 players by skill level.
 - /hallofshame  Top 10 players by last played date.
 - /aim          Leaderboard by aim rating.
@@ -32,8 +33,41 @@ The following commands are supported:
 - /results      Daily wins, losses, and ties for configured players (last 90 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
-```Most commands accept an optional `@username` argument, which defaults to yourself."
+```
+Most commands accept an optional `@username` argument, which defaults to yourself.
+Append a style and/or 5 or 10 to `/stats` or `/form` to choose a format and row width.
+Styles: squares by default, letters, trophy, drama, mood."
     );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecentFormStyle {
+    Squares,
+    Letters,
+    Trophy,
+    Drama,
+    Mood,
+}
+
+impl Default for RecentFormStyle {
+    fn default() -> Self {
+        Self::Squares
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecentFormOptions {
+    pub style: RecentFormStyle,
+    pub results_per_row: usize,
+}
+
+impl Default for RecentFormOptions {
+    fn default() -> Self {
+        Self {
+            style: RecentFormStyle::default(),
+            results_per_row: 10,
+        }
+    }
 }
 
 pub enum Command {
@@ -60,6 +94,13 @@ pub enum Command {
     /// Leetify stats for user
     Stats {
         for_user: Option<Username>,
+        form_options: RecentFormOptions,
+    },
+
+    /// Recent match results for a user
+    RecentForm {
+        for_user: Option<Username>,
+        form_options: RecentFormOptions,
     },
 
     /// Last played stats from Leetify
@@ -81,7 +122,7 @@ pub enum Command {
     /// Weather for configured location
     Weather,
 
-    /// Daily games played chart for last 365 days (optionally filter by @username)
+    /// Daily games played chart for last 90 days (optionally filter by @username)
     Activity {
         for_user: Option<Username>,
     },
@@ -185,6 +226,67 @@ fn parse_username_arg(s: String) -> Option<Username> {
     Some(Username::new(username.to_string()))
 }
 
+fn parse_recent_form_style(s: &str) -> Option<RecentFormStyle> {
+    match s.to_ascii_lowercase().as_str() {
+        "squares" | "square" | "color" | "colour" => Some(RecentFormStyle::Squares),
+        "letters" | "letter" | "classic" | "wlt" => Some(RecentFormStyle::Letters),
+        "trophy" | "trophies" | "medals" => Some(RecentFormStyle::Trophy),
+        "drama" | "dramatic" => Some(RecentFormStyle::Drama),
+        "mood" | "vibes" => Some(RecentFormStyle::Mood),
+        _ => None,
+    }
+}
+
+fn parse_recent_form_args(
+    args: Option<String>,
+) -> Result<(Option<Username>, RecentFormOptions), Box<dyn std::error::Error + Send + Sync>> {
+    let mut for_user = None;
+    let mut style = None;
+    let mut results_per_row = None;
+
+    for arg in args.as_deref().unwrap_or_default().split_whitespace() {
+        if let Some(username) = parse_username_arg(arg.to_string()) {
+            if for_user.replace(username).is_some() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "only one @username can be provided",
+                )
+                .into());
+            }
+        } else if let Some(parsed_style) = parse_recent_form_style(arg) {
+            if style.replace(parsed_style).is_some() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "only one recent-form style can be provided",
+                )
+                .into());
+            }
+        } else if arg == "5" || arg == "10" {
+            if results_per_row.replace(arg.parse::<usize>()?).is_some() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "only one row width can be provided",
+                )
+                .into());
+            }
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "usage: /stats or /form [@username] [squares|letters|trophy|drama|mood] [5|10]",
+            )
+            .into());
+        }
+    }
+
+    Ok((
+        for_user,
+        RecentFormOptions {
+            style: style.unwrap_or_default(),
+            results_per_row: results_per_row.unwrap_or(10),
+        },
+    ))
+}
+
 fn parse_prediction_match_count(
     args: Option<String>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
@@ -219,9 +321,18 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
                 Some(Command::Predictions { match_count })
             }
             "statistics" | "stats" => {
-                let for_user = args.and_then(parse_username_arg);
-
-                Some(Command::Stats { for_user })
+                let (for_user, form_options) = parse_recent_form_args(args)?;
+                Some(Command::Stats {
+                    for_user,
+                    form_options,
+                })
+            }
+            "form" | "recentform" => {
+                let (for_user, form_options) = parse_recent_form_args(args)?;
+                Some(Command::RecentForm {
+                    for_user,
+                    form_options,
+                })
             }
             "aim" => Some(Command::StatLeaderboard {
                 stat_type: "aim".to_string(),
