@@ -12,6 +12,10 @@ green/red/yellow square per match, aligned by date. Matches within each day run
 from top to bottom. The strip grows vertically to show busy days without hiding
 results; blank days mean no games.
 
+The trend uses one point per played day, calculated after that day's final match
+and centred over its date column. It still considers all matches in the rolling
+window; multiple games within a few hours no longer produce narrow spikes.
+
 Both percentages exclude ties (`wins / (wins + losses)`). Ties still occupy a
 place in the 20-match window and remain visible in the totals and strip. The
 trend starts once 20 known matches are available; available matches from before

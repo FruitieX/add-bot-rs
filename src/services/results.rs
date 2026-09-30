@@ -156,10 +156,20 @@ fn collect_results(mut games: Vec<LeetifyGame>, today: NaiveDate) -> ResultsData
         data.daily[(date - start).num_days() as usize].push(result);
         data.totals[result] += 1;
         if window.len() == FORM_WINDOW {
-            data.trend.push(TrendPoint {
-                time: game.game_finished_at,
+            let point = TrendPoint {
+                // Centre daily observations over the matching column of result squares.
+                time: date.and_hms_opt(12, 0, 0).unwrap().and_utc(),
                 rate: win_rate(rolling_counts),
-            });
+            };
+            if let Some(last) = data
+                .trend
+                .last_mut()
+                .filter(|last| last.time.date_naive() == date)
+            {
+                *last = point;
+            } else {
+                data.trend.push(point);
+            }
         }
     }
     data
@@ -322,7 +332,7 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
         )?;
         text(
             &root,
-            "Win rate over your last 20 matches · ties excluded from the percentage",
+            "Rolling 20-match win rate · after each day's last match · ties excluded",
             (LEFT, 341),
             19,
             MUTED,
@@ -418,16 +428,18 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
             7,
             MUTED.mix(0.75).stroke_width(2),
         ))?;
-        // Connected observations need no scatter markers. Short strokes preserve
-        // genuinely isolated windows, such as a history with just 20 matches.
-        for (index, point) in data.trend.iter().enumerate() {
-            let previous = index.checked_sub(1).and_then(|i| data.trend[i].rate);
-            let next = data.trend.get(index + 1).and_then(|p| p.rate);
-            if let Some(rate) = point.rate.filter(|_| previous.is_none() && next.is_none()) {
-                let color = if rate >= 50.0 { WIN } else { LOSS };
-                let x = x_pixel(point.time.timestamp() as f64);
+        // The daily line has no scatter markers. Preserve a short stroke for a
+        // standalone daily observation (including observations between tie-only gaps).
+        for daily_run in data.trend.split(|point| point.rate.is_none()) {
+            if let [TrendPoint {
+                time,
+                rate: Some(rate),
+            }] = daily_run
+            {
+                let color = if *rate >= 50.0 { WIN } else { LOSS };
+                let x = x_pixel(time.timestamp() as f64);
                 root.draw(&PathElement::new(
-                    vec![(x - 4, y_pixel(rate)), (x + 4, y_pixel(rate))],
+                    vec![(x - 4, y_pixel(*rate)), (x + 4, y_pixel(*rate))],
                     color.stroke_width(4),
                 ))?;
             }
@@ -608,7 +620,7 @@ mod tests {
                 } else {
                     "tie"
                 };
-                game(i, date, i as u32, result)
+                game(i, if i == 20 { today() } else { date }, i as u32, result)
             })
             .collect();
         let data = collect_results(games, today());
@@ -616,6 +628,32 @@ mod tests {
         assert!((data.trend[0].rate.unwrap() - 100.0 * 10.0 / 15.0).abs() < 1e-8);
         assert!((data.trend[1].rate.unwrap() - 100.0 * 9.0 / 14.0).abs() < 1e-8);
         assert_eq!(data.totals, [10, 5, 6]);
+    }
+
+    #[test]
+    fn daily_trend_keeps_only_the_final_window_but_preserves_every_match() {
+        let date = today() - Duration::days(1);
+        let mut games = (0..19)
+            .map(|i| game(i, date - Duration::days(1), i as u32, "win"))
+            .collect::<Vec<_>>();
+        games.extend([
+            game(19, date, 9, "loss"),
+            game(20, date, 10, "win"),
+            game(21, date, 23, "loss"),
+            game(22, today(), 10, "loss"),
+        ]);
+        games.reverse(); // API ordering must not decide which daily observation survives.
+        let data = collect_results(games, today());
+        assert_eq!(data.trend.len(), 2);
+        assert_eq!(
+            data.trend[0].time,
+            date.and_hms_opt(12, 0, 0).unwrap().and_utc()
+        );
+        assert_eq!(data.trend[0].rate, Some(90.0));
+        assert_eq!(data.trend[1].rate, Some(85.0));
+        assert_eq!(data.daily[88], vec![1, 0, 1]);
+        assert_eq!(data.daily[89], vec![1]);
+        assert_eq!(data.totals, [20, 3, 0]);
     }
 
     #[test]
