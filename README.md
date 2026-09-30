@@ -2,6 +2,29 @@
 
 trashety trash Telegram bot
 
+## Queue and player output
+
+Queue updates use compact headers with active occupancy, separate reserve lists,
+and the existing `Predicted winrate:` comparison. `/ls` lists queues in blocks
+with Today/Tomorrow labels. Instant queues are labelled “Instant queue”; ready
+announcements mention the active five, while reserves remain unmentioned.
+
+`/stats` separates recent match results from Leetify profile ratings. `/form`
+shows the actual number of available results, newest first. Both retain the
+requested icons and row width, with the legend below the grid and summary.
+Win percentages exclude ties; tie-only histories show `—` and empty histories
+have an explicit message.
+
+Teammate records show up to five configured players, ordered by games together
+within the target player's latest 30 available matches. Full rosters verify
+same-team membership, so opponents are excluded. Ties count towards games played
+and appear in the record only when present. Single-game records retain the
+result and sample size without a percentage. Incomplete required match details
+make teammate records unavailable rather than silently undercounting games.
+
+All raster charts share the corrected glyph layout used by `/results`, including
+activity/electricity captions, axes, legends, and annotations.
+
 ## Recent form themes
 
 Use `/form halloween`, `/stats burger 5`, or `/form @username panda` to choose

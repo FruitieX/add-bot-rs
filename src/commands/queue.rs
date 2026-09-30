@@ -12,7 +12,7 @@ use crate::{
     state::{AddRemovePlayerOp, AddRemovePlayerResult, Queue, State, QUEUE_SIZE},
     state_container::StateContainer,
     types::{QueueId, SteamID, Username},
-    util::{fmt_naive_time, mk_players_str, mk_queue_status_msg, send_msg},
+    util::{fmt_naive_time, mk_queue_roster, mk_queue_status_msg, queue_occupancy, send_msg},
 };
 
 static INSTANT_QUEUE_TIMEOUT_MINUTES: i64 = 30;
@@ -34,13 +34,7 @@ async fn handle_queue_timeout(
     let removed_queue = removed_queue?;
 
     // Inform players on Telegram about the timeout.
-    let text = if removed_queue.is_full() {
-        let players_str = mk_players_str(&removed_queue, true, false);
-        format!("{} queue: It's time to play!\n{}", queue_id, players_str)
-    } else {
-        let players_str = mk_players_str(&removed_queue, false, false);
-        format!("{} queue timed out!\n{}", queue_id, players_str)
-    };
+    let text = format_queue_timeout(&removed_queue, queue_id);
 
     send_msg(bot, chat_id, &text).await;
 
@@ -71,13 +65,63 @@ pub async fn poll_for_timeouts(sc: StateContainer, tz: Tz, bot: Bot) {
 
 /// Takes a sorted list of queues and returns human-readable strings with queue
 /// details.
-fn make_queue_strings(queues: Vec<(QueueId, Queue)>) -> Vec<String> {
+fn queue_label(queue_id: &QueueId, queue: &Queue, now: DateTime<Tz>) -> String {
+    if queue_id.is_instant_queue() {
+        return "Instant queue".to_string();
+    }
+    let start = queue_start_at(queue_id, queue, now);
+    let day = if start.date_naive() == now.date_naive() {
+        "Today"
+    } else {
+        "Tomorrow"
+    };
+    format!("{day} {}", fmt_naive_time(&queue.timeout))
+}
+
+fn format_queue_ready(
+    queue: &Queue,
+    label: &str,
+    announcement: &str,
+    prediction: Option<&str>,
+) -> String {
+    let prediction = prediction
+        .map(|value| format!("\n{value}"))
+        .unwrap_or_default();
+    format!(
+        "🎮 {label} · {} · {announcement}\n{}{prediction}",
+        queue_occupancy(queue),
+        mk_queue_roster(queue, true)
+    )
+}
+
+fn format_queue_timeout(queue: &Queue, queue_id: &QueueId) -> String {
+    let label = if queue_id.is_instant_queue() {
+        "Instant queue".to_string()
+    } else {
+        queue_id.to_string()
+    };
+    if queue.is_full() {
+        format_queue_ready(queue, &label, "It's time to play!", None)
+    } else {
+        format!(
+            "⌛ {label} · {} · Queue expired\n{}",
+            queue_occupancy(queue),
+            mk_queue_roster(queue, false)
+        )
+    }
+}
+
+fn make_queue_strings(queues: Vec<(QueueId, Queue)>, now: DateTime<Tz>) -> Vec<String> {
     queues
         .iter()
         .map(|(queue_id, queue)| {
-            let players_str = mk_players_str(queue, false, true);
-
-            format!("{} {} {}", queue_id, players_str, queue.add_cmd)
+            format!(
+                "{} · {} · {}\n{}",
+                queue_label(queue_id, queue, now),
+                queue_occupancy(queue),
+                queue.add_cmd,
+                mk_queue_roster(queue, false)
+            )
         })
         .collect()
 }
@@ -152,20 +196,21 @@ pub async fn add_remove(
     // Construct message based on whether the queue is now full or not.
     match result {
         AddRemovePlayerResult::QueueFull(queue) if queue_id.is_instant_queue() => {
-            let players_str = mk_players_str(&queue, true, false);
-            let predicted_winrate = predicted_winrate
-                .map(|value| format!("\n{value}"))
-                .unwrap_or_default();
-            format!(
-                "Match ready in {} queue! {}{}",
-                queue_id, players_str, predicted_winrate
+            format_queue_ready(
+                &queue,
+                "Instant queue",
+                "Ready to play!",
+                predicted_winrate.as_deref(),
             )
         }
         AddRemovePlayerResult::PlayerQueued(queue)
         | AddRemovePlayerResult::QueueFull(queue)
-        | AddRemovePlayerResult::QueueEmpty(queue) => {
-            mk_queue_status_msg(&queue, &queue_id, &op, predicted_winrate.as_deref())
-        }
+        | AddRemovePlayerResult::QueueEmpty(queue) => mk_queue_status_msg(
+            &queue,
+            &queue_label(&queue_id, &queue, Utc::now().with_timezone(tz)),
+            &op,
+            predicted_winrate.as_deref(),
+        ),
     }
 }
 
@@ -175,11 +220,15 @@ pub async fn remove_all(
     state: State,
     chat_id: ChatId,
     sc: &StateContainer,
+    tz: &Tz,
 ) -> String {
     let previous_state = state.clone();
 
     // Remove player and update state.
     let (state, affected_queues) = state.rm_player(&chat_id, &username);
+    if affected_queues.is_empty() {
+        return "You’re not in any queues.".to_string();
+    }
     let transitions = affected_queues
         .iter()
         .filter_map(|(queue_id, new_queue)| {
@@ -221,13 +270,13 @@ pub async fn remove_all(
             );
             mk_queue_status_msg(
                 queue,
-                queue_id,
+                &queue_label(queue_id, queue, Utc::now().with_timezone(tz)),
                 &AddRemovePlayerOp::PlayerRemoved(username.clone()),
                 predicted_winrate.as_deref(),
             )
         })
         .collect::<Vec<String>>()
-        .join("\n")
+        .join("\n\n")
 }
 
 pub fn list(state: State, chat_id: ChatId, tz: &Tz) -> String {
@@ -236,23 +285,15 @@ pub fn list(state: State, chat_id: ChatId, tz: &Tz) -> String {
 
     match queues {
         Some(queues) if !queues.is_empty() => {
-            let current_time = Utc::now().with_timezone(tz).time();
+            let now = Utc::now().with_timezone(tz);
 
             let mut queues: Vec<(QueueId, Queue)> = queues.into_iter().collect();
-            queues.sort_by(|(_, a), (_, b)| {
-                let a_next_day = a.timeout < current_time;
-                let b_next_day = b.timeout < current_time;
+            queues.sort_by_key(|(id, queue)| queue_start_at(id, queue, now).timestamp());
 
-                if a_next_day == b_next_day {
-                    a.timeout.cmp(&b.timeout)
-                } else if a_next_day {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            });
-
-            make_queue_strings(queues).join("\n")
+            format!(
+                "🎮 Queues\n\n{}",
+                make_queue_strings(queues, now).join("\n\n")
+            )
         }
         _ => String::from("No active queues."),
     }
@@ -944,6 +985,42 @@ pub async fn predictions(
 mod tests {
     use super::*;
     use chrono::{Duration, TimeZone};
+
+    #[test]
+    fn queue_listing_uses_blocks_and_distinguishes_today_tomorrow_and_instant() {
+        let now = chrono_tz::Europe::Helsinki
+            .with_ymd_and_hms(2026, 9, 30, 18, 0, 0)
+            .unwrap();
+        let mut queue = Queue::new(NaiveTime::from_hms_opt(19, 30, 0).unwrap(), "/1930".into());
+        queue.insert_player(Username::new("Alice".into()));
+        let blocks = make_queue_strings(vec![(QueueId::new("19:30".into()), queue.clone())], now);
+        assert_eq!(blocks, ["Today 19:30 · 1/5 · /1930\nAlice"]);
+        queue.timeout = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        assert_eq!(
+            queue_label(&QueueId::new("12:00".into()), &queue, now),
+            "Tomorrow 12:00"
+        );
+        assert_eq!(
+            queue_label(&QueueId::new(String::new()), &queue, now),
+            "Instant queue"
+        );
+    }
+
+    #[test]
+    fn ready_and_expired_queues_preserve_active_mentions_and_reserves() {
+        let id = QueueId::new("20:45".into());
+        let mut queue = Queue::new(NaiveTime::from_hms_opt(20, 45, 0).unwrap(), "/2045".into());
+        queue.insert_player(Username::new("Alice".into()));
+        assert_eq!(
+            format_queue_timeout(&queue, &id),
+            "⌛ 20:45 · 1/5 · Queue expired\nAlice"
+        );
+        for name in ["Bobby", "Carol", "David", "Frank", "Grace"] {
+            queue.insert_player(Username::new(name.into()));
+        }
+        assert_eq!(format_queue_timeout(&queue, &id), "🎮 20:45 · 5/5 · It's time to play!\n@Alice · @Bobby · @Carol · @David · @Frank\nReserve: Grace");
+        assert_eq!(format_queue_ready(&queue, "Instant queue", "Ready to play!", Some("Predicted winrate: 54% → 58%")), "🎮 Instant queue · 5/5 · Ready to play!\n@Alice · @Bobby · @Carol · @David · @Frank\nReserve: Grace\nPredicted winrate: 54% → 58%");
+    }
 
     #[test]
     fn predicted_winrate_transition_formats_previous_and_new_rates() {

@@ -1,3 +1,4 @@
+use super::chart_text::ChartBackend;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, Duration, NaiveDate, Utc};
@@ -38,8 +39,7 @@ pub async fn get_activity_chart(
     settings: &Settings,
     filter_user: Option<&Username>,
 ) -> Result<Vec<u8>> {
-    const SHOW_PLAYER_LINES: bool = false; // feature flag for per-player contributions
-                                           // Gather games per player in parallel
+    // Gather games per player in parallel.
     let mappings = settings.players.steamid_mappings.clone();
     let futures: Vec<_> = mappings
         .into_iter()
@@ -67,6 +67,15 @@ pub async fn get_activity_chart(
         }
     }
 
+    render_activity_chart(per_player_games, all_games, filter_user)
+}
+
+fn render_activity_chart(
+    per_player_games: Vec<(String, Vec<LeetifyGame>)>,
+    all_games: Vec<LeetifyGame>,
+    filter_user: Option<&Username>,
+) -> Result<Vec<u8>> {
+    const SHOW_PLAYER_LINES: bool = false;
     if all_games.is_empty() {
         return Err(eyre!("No games found for any configured player"));
     }
@@ -221,8 +230,11 @@ pub async fn get_activity_chart(
 
     let mut buffer = vec![0; width * height * 3];
     {
-        let root = BitMapBackend::with_buffer(&mut buffer, (width as u32, height as u32))
-            .into_drawing_area();
+        let root = ChartBackend(BitMapBackend::with_buffer(
+            &mut buffer,
+            (width as u32, height as u32),
+        ))
+        .into_drawing_area();
         root.fill(&WHITE)?;
 
         let caption = if let Some(u) = filter_user {
@@ -558,4 +570,39 @@ pub async fn get_activity_chart(
     )?;
 
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "writes sample charts for manual visual review"]
+    fn write_activity_preview() {
+        let mut games = Vec::new();
+        for day in (0..90).step_by(3) {
+            for index in 0..=day % 4 {
+                games.push(LeetifyGame {
+                    id: Some(format!("{day}-{index}")),
+                    own_team_steam64_ids: vec![],
+                    game_finished_at: Utc::now() - Duration::days(day),
+                    map_name: "de_nuke".into(),
+                    match_result: "win".into(),
+                    scores: (13, 9),
+                    skill_level: None,
+                    teammates_flashed: None,
+                    flashbangs_thrown: None,
+                    rounds_count: None,
+                });
+            }
+        }
+        let bob = games.iter().step_by(2).cloned().collect::<Vec<_>>();
+        let players = vec![("Alice".into(), games.clone()), ("Bob".into(), bob.clone())];
+        let all_games = games.iter().chain(&bob).cloned().collect();
+        let chart = render_activity_chart(players.clone(), all_games, None).unwrap();
+        std::fs::write("target/activity-preview.png", chart).unwrap();
+        let chart =
+            render_activity_chart(players, games, Some(&Username::new("Alice".into()))).unwrap();
+        std::fs::write("target/activity-player-preview.png", chart).unwrap();
+    }
 }

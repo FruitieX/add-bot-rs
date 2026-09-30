@@ -77,7 +77,7 @@ async fn handle_cmd_inner(
         }
         Command::RemoveAll => {
             let username = mk_username(&user);
-            remove_all(&settings, username, state, chat_id, &sc).await
+            remove_all(&settings, username, state, chat_id, &sc, &tz).await
         }
         Command::List => list(state, chat_id, &tz),
         Command::Predictions { match_count } => {

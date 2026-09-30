@@ -37,6 +37,7 @@ dependencies = [
  "lazy_static",
  "log",
  "plotters",
+ "plotters-backend",
  "pretty_env_logger",
  "rand 0.10.2",
  "regex",

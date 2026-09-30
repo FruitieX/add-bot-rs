@@ -1,3 +1,4 @@
+use super::chart_text::ChartBackend;
 use cached::proc_macro::cached;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
@@ -143,8 +144,11 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
     let mut buffer = vec![0; width * height * 3];
     // let mut buffer = String::new();
     {
-        let root = BitMapBackend::with_buffer(&mut buffer, (width as u32, height as u32))
-            .into_drawing_area();
+        let root = ChartBackend(BitMapBackend::with_buffer(
+            &mut buffer,
+            (width as u32, height as u32),
+        ))
+        .into_drawing_area();
         // let root =
         //     SVGBackend::with_string(&mut buffer, (width as u32, height as u32)).into_drawing_area();
         root.fill(&WHITE)?;

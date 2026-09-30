@@ -1,7 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::sync::LazyLock;
 
-use ab_glyph::{point, Font, FontRef, OutlinedGlyph, Rect, ScaleFont};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use color_eyre::{eyre::eyre, Result};
 use plotters::{
@@ -14,7 +12,10 @@ use plotters::{
 };
 
 use crate::{
-    services::leetify::{get_leetify_games, LeetifyGame},
+    services::{
+        chart_text::layout_text,
+        leetify::{get_leetify_games, LeetifyGame},
+    },
     settings::Settings,
     types::Username,
 };
@@ -35,53 +36,6 @@ const INK: RGBColor = RGBColor(25, 43, 54);
 const MUTED: RGBColor = RGBColor(101, 118, 129);
 const BORDER: RGBColor = RGBColor(229, 234, 240);
 const COLORS: [RGBColor; 3] = [WIN, LOSS, TIE];
-
-static REGULAR_FONT: LazyLock<FontRef<'static>> = LazyLock::new(|| {
-    FontRef::try_from_slice(include_bytes!("../../assets/Roboto-Regular.ttf"))
-        .expect("bundled regular font must be valid")
-});
-static BOLD_FONT: LazyLock<FontRef<'static>> = LazyLock::new(|| {
-    FontRef::try_from_slice(include_bytes!("../../assets/Roboto-Bold.ttf"))
-        .expect("bundled bold font must be valid")
-});
-
-struct TextLayout {
-    glyphs: Vec<OutlinedGlyph>,
-    bounds: Option<Rect>,
-}
-
-fn layout_text(value: &str, size: u32, bold: bool) -> TextLayout {
-    let font = if bold { &*BOLD_FONT } else { &*REGULAR_FONT };
-    let scaled = font.as_scaled(size as f32);
-    let mut cursor = 0.0;
-    let mut previous = None;
-    let mut layout = TextLayout {
-        glyphs: Vec::new(),
-        bounds: None,
-    };
-    for character in value.chars() {
-        let mut glyph = scaled.scaled_glyph(character);
-        if let Some(previous) = previous {
-            cursor += scaled.kern(previous, glyph.id);
-        }
-        // Outline at its fractional position, including the glyph's side bearings.
-        glyph.position = point(cursor, 0.0);
-        cursor += scaled.h_advance(glyph.id);
-        previous = Some(glyph.id);
-        if let Some(outlined) = font.outline_glyph(glyph) {
-            let bounds = outlined.px_bounds();
-            layout.bounds = Some(match layout.bounds {
-                Some(old) => Rect {
-                    min: point(old.min.x.min(bounds.min.x), old.min.y.min(bounds.min.y)),
-                    max: point(old.max.x.max(bounds.max.x), old.max.y.max(bounds.max.y)),
-                },
-                None => bounds,
-            });
-            layout.glyphs.push(outlined);
-        }
-    }
-    layout
-}
 
 fn game_key(game: &LeetifyGame) -> String {
     game.id.clone().unwrap_or_else(|| {
@@ -565,6 +519,8 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::chart_text::REGULAR_FONT;
+    use ab_glyph::{Font, ScaleFont};
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 9, 30).unwrap()

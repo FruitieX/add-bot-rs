@@ -1,6 +1,6 @@
 use crate::{
     state::{AddRemovePlayerOp, Queue},
-    types::{QueueId, Username},
+    types::Username,
 };
 use chrono::NaiveTime;
 use teloxide::{
@@ -57,40 +57,62 @@ pub async fn send_photo(bot: &Bot, chat_id: &ChatId, photo: InputFile) {
 /// Constructs a status message describing current queue status.
 pub fn mk_queue_status_msg(
     queue: &Queue,
-    queue_id: &QueueId,
+    label: &str,
     op: &AddRemovePlayerOp,
     predicted_winrate: Option<&str>,
 ) -> String {
-    let players_str = mk_players_str(queue, false, false);
+    let username = match op {
+        AddRemovePlayerOp::PlayerAdded(username) | AddRemovePlayerOp::PlayerRemoved(username) => {
+            escape_html(&username.to_string())
+        }
+    };
+    if queue.num_players() == 0 {
+        return format!("🎮 {label} · {username} left · Queue removed (empty)");
+    }
+    let action = match op {
+        AddRemovePlayerOp::PlayerAdded(name) => {
+            if queue.get_players().0.contains(name) {
+                "joined"
+            } else {
+                "joined reserve"
+            }
+        }
+        AddRemovePlayerOp::PlayerRemoved(_) => "left",
+    };
+    let players_str = mk_queue_roster(queue, false);
     let predicted_winrate = predicted_winrate
         .map(|value| format!("\n{value}"))
         .unwrap_or_default();
 
     format!(
-        "{} queue: {}.\n{}.{}\nUse {} to add/remove yourself from the queue!",
-        queue_id, op, players_str, predicted_winrate, queue.add_cmd,
+        "🎮 {label} · {} · {username} {action}\n{players_str}{predicted_winrate}\nJoin/leave: {}",
+        queue_occupancy(queue),
+        queue.add_cmd,
     )
 }
 
 /// Creates a string containing the list of players in queue.
-pub fn mk_players_str(queue: &Queue, highlight: bool, short: bool) -> String {
+pub fn mk_queue_roster(queue: &Queue, highlight: bool) -> String {
     let (players, reserve) = queue.get_players();
 
     let fmt_usernames = |usernames: Vec<Username>| {
         usernames
             .iter()
             .map(|username| {
-                if highlight {
-                    format!("@{}", username)
+                if highlight
+                    && username
+                        .to_string()
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    format!("@{}", escape_html(&username.to_string()))
                 } else {
-                    username.to_string()
+                    escape_html(&username.to_string())
                 }
             })
             .collect::<Vec<String>>()
-            .join(", ")
+            .join(" · ")
     };
-
-    let player_count = format!("{}/{}", queue.num_players(), queue.size());
 
     let players = fmt_usernames(players);
     let players = if players.is_empty() {
@@ -99,18 +121,26 @@ pub fn mk_players_str(queue: &Queue, highlight: bool, short: bool) -> String {
         players
     };
 
-    let reserve = reserve.map(fmt_usernames);
-
-    let title = if short { "" } else { "Players: " };
-
     if let Some(reserve) = reserve {
-        format!(
-            "{}{} ({}, Reserve: {})",
-            title, player_count, players, reserve
-        )
+        let reserve = reserve
+            .iter()
+            .map(|name| escape_html(&name.to_string()))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        format!("{players}\nReserve: {reserve}")
     } else {
-        format!("{}{} ({})", title, player_count, players)
+        players
     }
+}
+
+pub fn queue_occupancy(queue: &Queue) -> String {
+    format!("{}/{}", queue.num_players().min(queue.size()), queue.size())
+}
+
+pub fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -128,14 +158,48 @@ mod tests {
 
         let message = mk_queue_status_msg(
             &queue,
-            &QueueId::new("20:45".to_string()),
+            "Today 20:45",
             &AddRemovePlayerOp::PlayerAdded(Username::new("Machofantastic".to_string())),
             Some("Predicted winrate: 54% → 48%"),
         );
 
         assert_eq!(
             message,
-            "20:45 queue: Added Machofantastic.\nPlayers: 1/5 (Machofantastic).\nPredicted winrate: 54% → 48%\nUse /2045 to add/remove yourself from the queue!"
+            "🎮 Today 20:45 · 1/5 · Machofantastic joined\nMachofantastic\nPredicted winrate: 54% → 48%\nJoin/leave: /2045"
+        );
+    }
+
+    #[test]
+    fn reserves_are_separate_unmentioned_and_do_not_inflate_occupancy() {
+        let mut queue = Queue::new(NaiveTime::from_hms_opt(20, 45, 0).unwrap(), "/2045".into());
+        for name in ["Alice", "Bobby", "Carol", "David", "Frank", "Grace"] {
+            queue.insert_player(Username::new(name.into()));
+        }
+        assert_eq!(queue_occupancy(&queue), "5/5");
+        assert_eq!(
+            mk_queue_roster(&queue, true),
+            "@Alice · @Bobby · @Carol · @David · @Frank\nReserve: Grace"
+        );
+        assert!(mk_queue_status_msg(
+            &queue,
+            "Today 20:45",
+            &AddRemovePlayerOp::PlayerAdded(Username::new("Grace".into())),
+            None
+        )
+        .starts_with("🎮 Today 20:45 · 5/5 · Grace joined reserve\n"));
+    }
+
+    #[test]
+    fn empty_queue_message_has_no_stale_join_instruction() {
+        let queue = Queue::new(NaiveTime::from_hms_opt(20, 45, 0).unwrap(), "/2045".into());
+        assert_eq!(
+            mk_queue_status_msg(
+                &queue,
+                "Today 20:45",
+                &AddRemovePlayerOp::PlayerRemoved(Username::new("A&B".into())),
+                Some("Predicted winrate: 50%")
+            ),
+            "🎮 Today 20:45 · A&amp;B left · Queue removed (empty)"
         );
     }
 }
