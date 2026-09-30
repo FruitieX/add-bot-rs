@@ -37,7 +37,9 @@ The following commands are supported:
 ```
 Most commands accept an optional `@username` argument, which defaults to yourself.
 Append a style and/or 5 or 10 to `/stats` or `/form` to choose a format and row width.
-Styles: squares initially, letters, trophy, drama, mood, moon, xmas.
+Styles: squares initially, letters, trophy, drama, mood, moon, xmas,
+halloween, burger, panda, noodle, pirate, space, cat, dog, weather, garden, arcade,
+slop, hotdog, stocks, team, random, counterstrike (cs2, kynäri), mistakes, bike, car, traffic.
 An explicit style on your own stats or form saves your icon preference. Requests without a style use the target user's saved preference."
     );
 }
@@ -53,6 +55,27 @@ pub enum RecentFormStyle {
     Mood,
     Moon,
     Xmas,
+    Halloween,
+    Burger,
+    Panda,
+    Noodle,
+    Pirate,
+    Space,
+    Cat,
+    Dog,
+    Weather,
+    Garden,
+    Arcade,
+    Slop,
+    Hotdog,
+    Stocks,
+    Team,
+    Random,
+    Counterstrike,
+    Mistakes,
+    Bike,
+    Car,
+    Traffic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +260,27 @@ fn parse_recent_form_style(s: &str) -> Option<RecentFormStyle> {
         "mood" | "vibes" => Some(RecentFormStyle::Mood),
         "moon" | "sunmoon" => Some(RecentFormStyle::Moon),
         "xmas" | "christmas" | "jul" => Some(RecentFormStyle::Xmas),
+        "halloween" | "spooky" => Some(RecentFormStyle::Halloween),
+        "burger" | "burgers" => Some(RecentFormStyle::Burger),
+        "panda" | "pandas" => Some(RecentFormStyle::Panda),
+        "noodle" | "noodles" | "ramen" => Some(RecentFormStyle::Noodle),
+        "pirate" | "pirates" => Some(RecentFormStyle::Pirate),
+        "space" | "cosmos" => Some(RecentFormStyle::Space),
+        "cat" | "cats" => Some(RecentFormStyle::Cat),
+        "dog" | "dogs" => Some(RecentFormStyle::Dog),
+        "weather" => Some(RecentFormStyle::Weather),
+        "garden" | "gardening" => Some(RecentFormStyle::Garden),
+        "arcade" | "gaming" => Some(RecentFormStyle::Arcade),
+        "slop" => Some(RecentFormStyle::Slop),
+        "hotdog" | "hotdogs" => Some(RecentFormStyle::Hotdog),
+        "stocks" | "stock" | "stonks" => Some(RecentFormStyle::Stocks),
+        "team" => Some(RecentFormStyle::Team),
+        "random" => Some(RecentFormStyle::Random),
+        "counterstrike" | "cs2" | "kynäri" => Some(RecentFormStyle::Counterstrike),
+        "mistakes" | "mistake" => Some(RecentFormStyle::Mistakes),
+        "bike" | "bicycle" | "cycling" => Some(RecentFormStyle::Bike),
+        "car" | "cars" | "driving" => Some(RecentFormStyle::Car),
+        "traffic" => Some(RecentFormStyle::Traffic),
         _ => None,
     }
 }
@@ -474,6 +518,32 @@ mod tests {
                 ("xmas", true, RecentFormStyle::Xmas),
                 ("christmas", true, RecentFormStyle::Xmas),
                 ("jul", true, RecentFormStyle::Xmas),
+                ("halloween", true, RecentFormStyle::Halloween),
+                ("burger", true, RecentFormStyle::Burger),
+                ("panda", true, RecentFormStyle::Panda),
+                ("noodle", true, RecentFormStyle::Noodle),
+                ("pirate", true, RecentFormStyle::Pirate),
+                ("space", true, RecentFormStyle::Space),
+                ("cat", true, RecentFormStyle::Cat),
+                ("dog", true, RecentFormStyle::Dog),
+                ("weather", true, RecentFormStyle::Weather),
+                ("garden", true, RecentFormStyle::Garden),
+                ("arcade", true, RecentFormStyle::Arcade),
+                ("slop", true, RecentFormStyle::Slop),
+                ("hotdog", true, RecentFormStyle::Hotdog),
+                ("stocks", true, RecentFormStyle::Stocks),
+                ("@player HALLOWEEN 5", true, RecentFormStyle::Halloween),
+                ("ramen", true, RecentFormStyle::Noodle),
+                ("stonks", true, RecentFormStyle::Stocks),
+                ("team", true, RecentFormStyle::Team),
+                ("random", true, RecentFormStyle::Random),
+                ("counterstrike", true, RecentFormStyle::Counterstrike),
+                ("cs2", true, RecentFormStyle::Counterstrike),
+                ("kynäri", true, RecentFormStyle::Counterstrike),
+                ("mistakes", true, RecentFormStyle::Mistakes),
+                ("bike", true, RecentFormStyle::Bike),
+                ("car", true, RecentFormStyle::Car),
+                ("traffic", true, RecentFormStyle::Traffic),
             ] {
                 let parsed = parse_cmd(&format!("/{command} {args}")).unwrap().unwrap();
                 let options = match parsed {

@@ -2,6 +2,44 @@
 
 trashety trash Telegram bot
 
+## Recent form themes
+
+Use `/form halloween`, `/stats burger 5`, or `/form @username panda` to choose
+icons for recent wins, losses, and ties. Row width can be 5 or 10. Choosing a
+theme for your own stats or form saves it as your preference; requests without
+a theme use the target player's saved preference.
+
+The existing themes are `squares` (initial default), `letters`, `trophy`,
+`drama`, `mood`, `moon`, and `xmas`. New themes:
+
+| Theme | Win | Loss | Tie |
+| --- | --- | --- | --- |
+| `halloween` | 🎃 | 👻 | 🍬 |
+| `burger` | 🍔 | 🥬 | 🍟 |
+| `panda` | 🐼 | 🐻 | 🎋 |
+| `noodle` | 🍜 | 🫗 | 🥢 |
+| `pirate` | 💰 | ☠️ | ⚓ |
+| `space` | 🚀 | ☄️ | 🛸 |
+| `cat` | 😸 | 😿 | 😼 |
+| `dog` | 🦴 | 💩 | 🐕 |
+| `weather` | ☀️ | ⛈️ | ☁️ |
+| `garden` | 🌻 | 🥀 | 🌱 |
+| `arcade` | 👾 | 💥 | 🕹️ |
+| `slop` | 🤖 | 🗑️ | 🫠 |
+| `hotdog` | 🌭 | 💩 | 🥖 |
+| `stocks` | 📈 | 📉 | ➖ |
+| `team` | 🏆 | 🚑 | 🤝 |
+| `random` | Random | Random | Random |
+| `counterstrike` / `cs2` / `kynäri` | 💣 | 🐔 | 🛡️ |
+| `mistakes` | 🎯 | 🤦 | 🤷 |
+| `bike` | 🚴 | 💥 | 🚲 |
+| `car` | 🏎️ | 🚧 | 🚗 |
+| `traffic` | 🟢 | 🔴 | 🟡 |
+
+`random` draws three distinct emoji afresh on each invocation, keeping the
+win/loss/tie mapping consistent within that response and showing it in the legend.
+You can save `random` as your preference just like any other theme.
+
 ## Match results
 
 `/results` shows the configured players' unique matches over the last 90 UTC

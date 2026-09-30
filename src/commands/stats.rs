@@ -170,6 +170,18 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
     }
 }
 
+fn random_form_icons() -> (&'static str, &'static str, &'static str) {
+    use rand::seq::SliceRandom;
+
+    let mut icons = [
+        "🎃", "👻", "🍬", "🍔", "🥬", "🍟", "🐼", "🐻", "🎋", "🍜", "🫗", "🥢", "💰", "☠️", "⚓",
+        "🚀", "☄️", "🛸", "😸", "😿", "😼", "🦴", "💩", "🐕", "☀️", "⛈️", "☁️", "🌻", "🥀", "🌱",
+        "👾", "💥", "🕹️", "🤖", "🗑️", "🫠", "🌭", "🥖", "📈", "📉", "➖", "🏆", "🚑", "🤝",
+    ];
+    icons.shuffle(&mut rand::rng());
+    (icons[0], icons[1], icons[2])
+}
+
 fn format_recent_results_with_options(
     recent_matches: &[services::leetify::RecentMatch],
     form_options: RecentFormOptions,
@@ -199,39 +211,42 @@ fn format_recent_results_with_options(
     } else {
         wins as f32 / (wins + losses) as f32 * 100.0
     };
-    let result_marker = |result: &services::leetify::MatchResult| match (form_options.style, result)
-    {
-        (RecentFormStyle::Squares, services::leetify::MatchResult::Win) => "🟩",
-        (RecentFormStyle::Squares, services::leetify::MatchResult::Loss) => "🟥",
-        (RecentFormStyle::Squares, services::leetify::MatchResult::Tie) => "🟨",
-        (RecentFormStyle::Letters, services::leetify::MatchResult::Win) => "W",
-        (RecentFormStyle::Letters, services::leetify::MatchResult::Loss) => "L",
-        (RecentFormStyle::Letters, services::leetify::MatchResult::Tie) => "T",
-        (RecentFormStyle::Trophy, services::leetify::MatchResult::Win) => "🏆",
-        (RecentFormStyle::Trophy, services::leetify::MatchResult::Loss) => "💀",
-        (RecentFormStyle::Trophy, services::leetify::MatchResult::Tie) => "👔",
-        (RecentFormStyle::Drama, services::leetify::MatchResult::Win) => "🎉",
-        (RecentFormStyle::Drama, services::leetify::MatchResult::Loss) => "🪦",
-        (RecentFormStyle::Drama, services::leetify::MatchResult::Tie) => "🤝",
-        (RecentFormStyle::Mood, services::leetify::MatchResult::Win) => "😎",
-        (RecentFormStyle::Mood, services::leetify::MatchResult::Loss) => "😭",
-        (RecentFormStyle::Mood, services::leetify::MatchResult::Tie) => "😐",
-        (RecentFormStyle::Moon, services::leetify::MatchResult::Win) => "🌞",
-        (RecentFormStyle::Moon, services::leetify::MatchResult::Loss) => "🌚",
-        (RecentFormStyle::Moon, services::leetify::MatchResult::Tie) => "🌗",
-        (RecentFormStyle::Xmas, services::leetify::MatchResult::Win) => "🎁",
-        (RecentFormStyle::Xmas, services::leetify::MatchResult::Loss) => "🪨",
-        (RecentFormStyle::Xmas, services::leetify::MatchResult::Tie) => "🎄",
+    let (win_icon, loss_icon, tie_icon) = match form_options.style {
+        RecentFormStyle::Squares => ("🟩", "🟥", "🟨"),
+        RecentFormStyle::Letters => ("W", "L", "T"),
+        RecentFormStyle::Trophy => ("🏆", "💀", "👔"),
+        RecentFormStyle::Drama => ("🎉", "🪦", "🤝"),
+        RecentFormStyle::Mood => ("😎", "😭", "😐"),
+        RecentFormStyle::Moon => ("🌞", "🌚", "🌗"),
+        RecentFormStyle::Xmas => ("🎁", "🪨", "🎄"),
+        RecentFormStyle::Halloween => ("🎃", "👻", "🍬"),
+        RecentFormStyle::Burger => ("🍔", "🥬", "🍟"),
+        RecentFormStyle::Panda => ("🐼", "🐻", "🎋"),
+        RecentFormStyle::Noodle => ("🍜", "🫗", "🥢"),
+        RecentFormStyle::Pirate => ("💰", "☠️", "⚓"),
+        RecentFormStyle::Space => ("🚀", "☄️", "🛸"),
+        RecentFormStyle::Cat => ("😸", "😿", "😼"),
+        RecentFormStyle::Dog => ("🦴", "💩", "🐕"),
+        RecentFormStyle::Weather => ("☀️", "⛈️", "☁️"),
+        RecentFormStyle::Garden => ("🌻", "🥀", "🌱"),
+        RecentFormStyle::Arcade => ("👾", "💥", "🕹️"),
+        RecentFormStyle::Slop => ("🤖", "🗑️", "🫠"),
+        RecentFormStyle::Hotdog => ("🌭", "💩", "🥖"),
+        RecentFormStyle::Stocks => ("📈", "📉", "➖"),
+        RecentFormStyle::Team => ("🏆", "🚑", "🤝"),
+        RecentFormStyle::Random => random_form_icons(),
+        RecentFormStyle::Counterstrike => ("💣", "🐔", "🛡️"),
+        RecentFormStyle::Mistakes => ("🎯", "🤦", "🤷"),
+        RecentFormStyle::Bike => ("🚴", "💥", "🚲"),
+        RecentFormStyle::Car => ("🏎️", "🚧", "🚗"),
+        RecentFormStyle::Traffic => ("🟢", "🔴", "🟡"),
     };
-    let legend = match form_options.style {
-        RecentFormStyle::Squares => "🟩 win · 🟥 loss · 🟨 tie",
-        RecentFormStyle::Letters => "W win · L loss · T tie",
-        RecentFormStyle::Trophy => "🏆 win · 💀 loss · 👔 tie",
-        RecentFormStyle::Drama => "🎉 win · 🪦 loss · 🤝 tie",
-        RecentFormStyle::Mood => "😎 win · 😭 loss · 😐 tie",
-        RecentFormStyle::Moon => "🌞 win · 🌚 loss · 🌗 tie",
-        RecentFormStyle::Xmas => "🎁 win · 🪨 loss · 🎄 tie",
+    let result_marker = |result: &services::leetify::MatchResult| match result {
+        services::leetify::MatchResult::Win => win_icon,
+        services::leetify::MatchResult::Loss => loss_icon,
+        services::leetify::MatchResult::Tie => tie_icon,
     };
+    let legend = format!("{win_icon} win · {loss_icon} loss · {tie_icon} tie");
     let results = recent_matches
         .iter()
         .map(|m| result_marker(&m.result))
@@ -482,6 +497,41 @@ mod tests {
 
     fn result(result: MatchResult) -> RecentMatch {
         RecentMatch { result }
+    }
+
+    #[test]
+    fn random_theme_keeps_distinct_icons_consistent_with_legend() {
+        let matches = vec![
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Tie),
+            result(MatchResult::Win),
+        ];
+        let rendered = format_recent_results_with_options(
+            &matches,
+            RecentFormOptions {
+                style: RecentFormStyle::Random,
+                ..RecentFormOptions::default()
+            },
+        );
+        let legend = rendered.lines().next().unwrap();
+        let icons = legend
+            .trim_start_matches("<i>")
+            .trim_end_matches("</i>")
+            .split(" · ")
+            .map(|entry| entry.split(' ').next().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(icons.len(), 3);
+        assert_ne!(icons[0], icons[1]);
+        assert_ne!(icons[0], icons[2]);
+        assert_ne!(icons[1], icons[2]);
+        assert_eq!(
+            rendered,
+            format!(
+                "<i>{} win · {} loss · {} tie</i>\n<pre>{}{}{}{}</pre>\n<b>2W / 1L / 1T</b> · <b>67% win rate</b>",
+                icons[0], icons[1], icons[2], icons[0], icons[1], icons[2], icons[0]
+            )
+        );
     }
 
     #[test]
