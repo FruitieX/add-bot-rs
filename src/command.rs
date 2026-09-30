@@ -59,7 +59,7 @@ garden, arcade, slop, hotdog, stocks, team, random, counterstrike,
 mistakes, bike, car, traffic.
 
 <code>cs2</code> and <code>kynäri</code> are aliases for counterstrike.
-Random draws fresh win/loss/tie emoji each time.
+Random draws fresh emoji from good/win, bad/loss, and neutral/tie pools each time.
 Choosing a theme for your own stats or form saves your preference.
 Without a theme, requests use the target player's saved preference."
     );

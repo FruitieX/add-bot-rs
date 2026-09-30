@@ -170,16 +170,42 @@ pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> St
     }
 }
 
-fn random_form_icons() -> (&'static str, &'static str, &'static str) {
-    use rand::seq::SliceRandom;
+const RANDOM_WIN_ICONS: &[&str] = &[
+    "😀", "😃", "😄", "😁", "😆", "😊", "😎", "🥳", "🤩", "😍", "🥰", "😇", "😸", "😺", "😻", "😹",
+    "🙌", "👏", "👍", "🤘", "💪", "🏆", "🥇", "🏅", "🎖️", "👑", "💎", "💰", "💵", "💸", "🎉", "🎊",
+    "🎆", "🎇", "✨", "🌟", "⭐", "💫", "🔥", "🚀", "📈", "✅", "✔️", "💯", "🟢", "🟩", "💚", "🍀",
+    "🌈", "☀️", "🌞", "🌻", "🌸", "🌺", "🌼", "🎁", "🎂", "🍰", "🍔", "🍟",
+];
 
-    let mut icons = [
-        "🎃", "👻", "🍬", "🍔", "🥬", "🍟", "🐼", "🐻", "🎋", "🍜", "🫗", "🥢", "💰", "☠️", "⚓",
-        "🚀", "☄️", "🛸", "😸", "😿", "😼", "🦴", "💩", "🐕", "☀️", "⛈️", "☁️", "🌻", "🥀", "🌱",
-        "👾", "💥", "🕹️", "🤖", "🗑️", "🫠", "🌭", "🥖", "📈", "📉", "➖", "🏆", "🚑", "🤝",
-    ];
-    icons.shuffle(&mut rand::rng());
-    (icons[0], icons[1], icons[2])
+const RANDOM_LOSS_ICONS: &[&str] = &[
+    "😢", "😭", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "😤", "😠", "😡", "🤬",
+    "😱", "😨", "😰", "😓", "😥", "😪", "🤒", "🤕", "🤢", "🤮", "😵", "🥴", "😿", "🙀", "👎", "💔",
+    "💀", "☠️", "🪦", "⚰️", "🧟", "👻", "💩", "🗑️", "💥", "🧨", "🔻", "📉", "❌", "🚫", "⛔", "🛑",
+    "🟥", "🔴", "🥀", "🌧️", "⛈️", "🌩️", "🌪️", "🕳️", "🪤", "🚑", "🩼", "🤦",
+];
+
+const RANDOM_TIE_ICONS: &[&str] = &[
+    "😐", "😑", "😶", "🫤", "🤔", "🤨", "🧐", "😴", "🥱", "🤷", "🤝", "🫱", "🫲", "👋", "👀", "⚖️",
+    "➖", "🟰", "↔️", "🔄", "⏸️", "⏯️", "🟨", "🟡", "⚪", "⚫", "⬜", "⬛", "🔘", "◻️", "◼️", "🌗",
+    "🌓", "🌙", "☁️", "🌫️", "🌥️", "🪨", "🧱", "⚓", "🧭", "⏳", "⌛", "🕰️", "⏰", "🎲", "🧩", "🪙",
+    "👔", "🥢", "🍽️", "🥖", "🫖", "☕", "🥛", "🚦", "🛸", "🤖", "📦", "💤",
+];
+
+fn random_form_icons() -> (&'static str, &'static str, &'static str) {
+    use rand::seq::IndexedRandom;
+
+    let mut rng = rand::rng();
+    (
+        *RANDOM_WIN_ICONS
+            .choose(&mut rng)
+            .expect("win pool is nonempty"),
+        *RANDOM_LOSS_ICONS
+            .choose(&mut rng)
+            .expect("loss pool is nonempty"),
+        *RANDOM_TIE_ICONS
+            .choose(&mut rng)
+            .expect("tie pool is nonempty"),
+    )
 }
 
 fn format_recent_results_with_options(
@@ -501,6 +527,18 @@ mod tests {
     }
 
     #[test]
+    fn random_pools_are_nonempty_valid_emoji_without_duplicates_or_overlap() {
+        let mut seen = std::collections::HashSet::new();
+        for pool in [RANDOM_WIN_ICONS, RANDOM_LOSS_ICONS, RANDOM_TIE_ICONS] {
+            assert!(!pool.is_empty());
+            for icon in pool {
+                assert!(emojis::get(icon).is_some(), "invalid emoji: {icon}");
+                assert!(seen.insert(icon), "duplicate emoji: {icon}");
+            }
+        }
+    }
+
+    #[test]
     fn custom_theme_renders_results_and_legend_in_win_loss_tie_order() {
         let matches = vec![
             result(MatchResult::Win),
@@ -545,6 +583,9 @@ mod tests {
             .map(|entry| entry.split(' ').next().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(icons.len(), 3);
+        assert!(RANDOM_WIN_ICONS.contains(&icons[0]));
+        assert!(RANDOM_LOSS_ICONS.contains(&icons[1]));
+        assert!(RANDOM_TIE_ICONS.contains(&icons[2]));
         assert_ne!(icons[0], icons[1]);
         assert_ne!(icons[0], icons[2]);
         assert_ne!(icons[1], icons[2]);

@@ -36,8 +36,11 @@ The existing themes are `squares` (initial default), `letters`, `trophy`,
 | `car` | 🏎️ | 🚧 | 🚗 |
 | `traffic` | 🟢 | 🔴 | 🟡 |
 
-`random` draws three distinct emoji afresh on each invocation, keeping the
-win/loss/tie mapping consistent within that response and showing it in the legend.
+`random` draws one emoji from each of three curated pools on every invocation:
+60 good/win emoji, 60 bad/loss emoji, and 60 neutral/tie emoji (180 total).
+Each emoji in its pool has an equal chance of being drawn. The pools do not
+overlap, so the three emoji are distinct. The win/loss/tie mapping stays
+consistent within that response and is shown in the legend.
 You can save `random` as your preference just like any other theme.
 
 Custom themes use three emoji in **win / loss / tie** order instead of a theme
