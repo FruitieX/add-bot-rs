@@ -18,10 +18,9 @@ fn index_to_pos(index: usize) -> String {
     }
 }
 
-fn skill_level_to_cs2_rank(skill_level: u32) -> String {
-    let unranked_text = "Unranked";
-    let ranks = [
-        unranked_text,
+fn skill_level_to_cs2_rank(skill_level: u32) -> &'static str {
+    const RANKS: [&str; 19] = [
+        "Unranked",
         "Silver I",
         "Silver II",
         "Silver III",
@@ -41,132 +40,181 @@ fn skill_level_to_cs2_rank(skill_level: u32) -> String {
         "Supreme Master First Class",
         "Global Elite",
     ];
+    RANKS
+        .get(skill_level as usize)
+        .copied()
+        .unwrap_or("Unknown rank")
+}
 
-    if skill_level < 1000 {
-        let rank = ranks
-            .get(skill_level as usize)
-            .unwrap_or(&unranked_text)
-            .to_string();
-
-        format!("{skill_level}, {rank}")
-    } else {
-        skill_level.to_string()
+fn map_display_name(map: &str) -> String {
+    let name = map
+        .strip_prefix("de_")
+        .or_else(|| map.strip_prefix("cs_"))
+        .unwrap_or(map);
+    let mut characters = name.chars();
+    match characters.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), characters.as_str()),
+        None => String::new(),
     }
+}
+
+fn format_hall_of_fame(leaderboard: &services::leetify::HallOfFame, rank_type: &str) -> String {
+    let name = map_display_name(rank_type);
+    if leaderboard.entries.is_empty() {
+        return format!("No entries found for {}. ☹️", escape_html(&name));
+    }
+    let premier = rank_type == "premier";
+    let list = leaderboard
+        .entries
+        .iter()
+        .take(10)
+        .enumerate()
+        .map(|(index, entry)| {
+            let value = if premier {
+                format_rating_number(entry.skill_level)
+            } else {
+                skill_level_to_cs2_rank(entry.skill_level).to_string()
+            };
+            format!(
+                "{} {} · {value}",
+                index_to_pos(index),
+                escape_html(&entry.username.to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = if premier {
+        format!(
+            "Group average {} · Median {}",
+            format_rating_number(leaderboard.avg_skill_level.round() as u32),
+            format_rating_number(leaderboard.median_skill_level)
+        )
+    } else {
+        format!(
+            "Group median · {}",
+            skill_level_to_cs2_rank(leaderboard.median_skill_level)
+        )
+    };
+    format!("🏆 {} · Top 10\n\n{list}\n\n{summary}", escape_html(&name))
 }
 
 pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
-    let res = services::leetify::hall_of_fame(settings, &rank_type).await;
-
-    match res {
-        Ok(hall_of_fame) => {
-            let avg = hall_of_fame.avg_skill_level;
-            let median = hall_of_fame.median_skill_level;
-            let list = hall_of_fame
-                .entries
-                .iter()
-                .take(10)
-                .enumerate()
-                .map(|(index, entry)| {
-                    let username = &entry.username;
-                    let pos = index_to_pos(index);
-                    let skill_level = skill_level_to_cs2_rank(entry.skill_level);
-
-                    format!("{pos}: {username} (rating: {skill_level})")
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
-
-            if hall_of_fame.entries.is_empty() {
-                return format!("No entries found for {rank_type}. ☹️",);
-            }
-
-            format!(
-                "Hall of fame, or top 10 {rank_type} ranks:\n\n{list}\n\nAvg: {avg:.0}, Median: {median}"
-            )
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch stats from Leetify: {}", e);
+    match services::leetify::hall_of_fame(settings, &rank_type).await {
+        Ok(leaderboard) => format_hall_of_fame(&leaderboard, &rank_type),
+        Err(error) => {
+            eprintln!("Failed to fetch ranks from Leetify: {error}");
             "Failed to fetch stats from Leetify".to_string()
         }
     }
+}
+
+fn format_hall_of_shame(
+    leaderboard: &services::leetify::HallOfShame,
+    now: chrono::DateTime<Tz>,
+) -> String {
+    let mut sections = Vec::new();
+    if !leaderboard.entries.is_empty() {
+        let list = leaderboard
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let date = entry.last_played.with_timezone(&now.timezone());
+                let days_ago = (now.date_naive() - date.date_naive()).num_days();
+                let noun = if days_ago == 1 { "day" } else { "days" };
+                let streak = entry
+                    .spree
+                    .filter(|days| *days > 1)
+                    .map(|days| format!(" · 🔥 {days}-day streak"))
+                    .unwrap_or_default();
+                format!(
+                    "{} {} · {days_ago} {noun} · {}{streak}",
+                    index_to_pos(index),
+                    escape_html(&entry.username.to_string()),
+                    date.format("%-d %b")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        sections.push(list);
+        let average = leaderboard
+            .entries
+            .iter()
+            .map(|entry| {
+                (now.date_naive()
+                    - entry
+                        .last_played
+                        .with_timezone(&now.timezone())
+                        .date_naive())
+                .num_days()
+            })
+            .sum::<i64>()
+            / leaderboard.entries.len() as i64;
+        sections.push(format!(
+            "Group average · {average} {}",
+            if average == 1 { "day" } else { "days" }
+        ));
+    } else {
+        sections.push("No verified squad matches found in the available history.".to_string());
+    }
+    if !leaderboard.unavailable.is_empty() {
+        sections.push(format!(
+            "Unknown: {} (no verified squad history)",
+            leaderboard
+                .unavailable
+                .iter()
+                .map(|name| escape_html(&name.to_string()))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ));
+    }
+    format!(
+        "💀 Hall of shame · Last recorded squad match\n\n{}",
+        sections.join("\n\n")
+    )
 }
 
 pub async fn hall_of_shame(settings: &Settings, tz: &Tz) -> String {
-    let res = services::leetify::hall_of_shame(settings).await;
-
-    match res {
-        Ok(entries) => {
-            if entries.is_empty() {
-                return "No Leetify match data found. ☹️".to_string();
-            }
-
-            let list = entries
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| {
-                    let t = entry.last_played.with_timezone(&tz.clone());
-                    let t = t.format("%Y-%m-%d");
-                    let days_ago = (Utc::now().with_timezone(tz).date_naive()
-                        - entry.last_played.with_timezone(tz).date_naive())
-                    .num_days();
-                    let days = if days_ago == 1 { "day" } else { "days" };
-                    let username = &entry.username;
-                    let pos = index_to_pos(index);
-                    let spree = if entry.spree > 1 {
-                        format!(" ({spree} day spree)", spree = entry.spree)
-                    } else {
-                        "".to_string()
-                    };
-
-                    format!("{pos} {t} ({days_ago} {days} ago): {username}{spree}")
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
-
-            let days_since_last_played: Vec<i64> = entries
-                .iter()
-                .map(|entry| {
-                    (Utc::now().date_naive() - entry.last_played.with_timezone(tz).date_naive())
-                        .num_days()
-                })
-                .collect();
-
-            let avg =
-                days_since_last_played.iter().sum::<i64>() / days_since_last_played.len() as i64;
-
-            format!(
-                "Hall of shame, or longest time since last played with team:\n\n{list}\n\nAvg: {avg:.0} days",
-            )
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch stats from Leetify: {}", e);
+    match services::leetify::hall_of_shame(settings, *tz).await {
+        Ok(leaderboard) => format_hall_of_shame(&leaderboard, Utc::now().with_timezone(tz)),
+        Err(error) => {
+            eprintln!("Failed to fetch squad history from Leetify: {error}");
             "Failed to fetch stats from Leetify".to_string()
         }
     }
 }
 
+fn format_last_played(
+    result: &services::leetify::LastPlayedResult,
+    username: &Username,
+    now: chrono::DateTime<Tz>,
+) -> String {
+    let game = &result.game;
+    let date = game.game_finished_at.with_timezone(&now.timezone());
+    let days_ago = (now.date_naive() - date.date_naive()).num_days();
+    let noun = if days_ago == 1 { "day" } else { "days" };
+    let icon = match game.match_result.as_str() {
+        "win" => "🟩",
+        "loss" => "🟥",
+        "tie" => "🟨",
+        _ => "—",
+    };
+    let teammates = result
+        .teammates
+        .iter()
+        .map(|name| escape_html(&name.to_string()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!("🎮 {} · Last recorded squad match\n{icon} {} · {}–{}\n{} · {days_ago} {noun} ago\nWith {teammates}", escape_html(&username.to_string()), escape_html(&map_display_name(&game.map_name)), game.scores.0, game.scores.1, date.format("%-d %b %H:%M"))
+}
+
 pub async fn last_played(settings: &Settings, tz: &Tz, username: Username) -> String {
-    let res = services::leetify::last_played(settings, &username).await;
-
-    match res {
-        Ok(game) => {
-            let t = game.game_finished_at;
-            let t = t.with_timezone(&tz.clone()).format("%Y-%m-%d %H:%M:%S");
-            let days_ago = (Utc::now().with_timezone(tz).date_naive()
-                - game.game_finished_at.with_timezone(tz).date_naive())
-            .num_days();
-            let days = if days_ago == 1 { "day" } else { "days" };
-            let map = game.map_name;
-            let match_result = format!("{}-{} {}", game.scores.0, game.scores.1, game.match_result);
-
-            let text = format!(
-                        "{username} last played with team (according to Leetify):\n- Date: {t} ({days_ago} {days} ago)\n- Map: {map}\n- Result: {match_result}"
-                    );
-            text
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch last played stats from Leetify: {}", e);
-            "Failed to fetch last played stats from Leetify".to_string()
+    match services::leetify::last_played(settings, &username, *tz).await {
+        Ok(result) => format_last_played(&result, &username, Utc::now().with_timezone(tz)),
+        Err(error) => {
+            eprintln!("Failed to fetch last squad match from Leetify: {error}");
+            "Last squad match unavailable: no verified match found or history could not be fetched."
+                .to_string()
         }
     }
 }
@@ -470,42 +518,57 @@ fn format_stat_value(stat_type: &str, value: f32) -> String {
         // Opening and clutch are stored as decimals (0.xx), display as percentages
         "opening" | "clutch" => format!("{:.1}%", value * 100.0),
         // Aim, positioning, utility are direct ratings (e.g. 0.85)
-        _ => format!("{:.2}", value),
+        _ => format!("{:.1}", value),
     }
 }
 
+fn stat_icon(stat_type: &str) -> &'static str {
+    match stat_type {
+        "aim" => "🎯",
+        "positioning" => "🧭",
+        "utility" => "🧨",
+        "opening" => "⚔️",
+        "clutch" => "🔥",
+        _ => "🏆",
+    }
+}
+
+fn format_stat_leaderboard(
+    leaderboard: &services::leetify::StatLeaderboard,
+    stat_type: &str,
+) -> String {
+    let name = stat_type_display_name(stat_type);
+    if leaderboard.entries.is_empty() {
+        return format!("No entries found for {name}. ☹️");
+    }
+    let list = leaderboard
+        .entries
+        .iter()
+        .take(10)
+        .enumerate()
+        .map(|(index, entry)| {
+            format!(
+                "{} {} · {}",
+                index_to_pos(index),
+                escape_html(&entry.username.to_string()),
+                format_stat_value(stat_type, entry.stat_value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{} {name} · Top 10\n\n{list}\n\nGroup average {} · Median {}",
+        stat_icon(stat_type),
+        format_stat_value(stat_type, leaderboard.avg),
+        format_stat_value(stat_type, leaderboard.median)
+    )
+}
+
 pub async fn stat_leaderboard(settings: &Settings, stat_type: String) -> String {
-    let res = services::leetify::stat_leaderboard(settings, &stat_type).await;
-
-    match res {
-        Ok(leaderboard) => {
-            let stat_name = stat_type_display_name(&stat_type);
-            let list = leaderboard
-                .entries
-                .iter()
-                .take(10)
-                .enumerate()
-                .map(|(index, entry)| {
-                    let username = &entry.username;
-                    let pos = index_to_pos(index);
-                    let stat_value = format_stat_value(&stat_type, entry.stat_value);
-
-                    format!("{pos}: {username} ({stat_value})")
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
-
-            if leaderboard.entries.is_empty() {
-                return format!("No entries found for {stat_name}. ☹️");
-            }
-
-            let avg = format_stat_value(&stat_type, leaderboard.avg);
-            let median = format_stat_value(&stat_type, leaderboard.median);
-
-            format!("{stat_name} Leaderboard (top 10):\n\n{list}\n\nAvg: {avg}, Median: {median}")
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch stat leaderboard from Leetify: {}", e);
+    match services::leetify::stat_leaderboard(settings, &stat_type).await {
+        Ok(leaderboard) => format_stat_leaderboard(&leaderboard, &stat_type),
+        Err(error) => {
+            eprintln!("Failed to fetch stat leaderboard from Leetify: {error}");
             "Failed to fetch stat leaderboard from Leetify".to_string()
         }
     }
@@ -520,45 +583,35 @@ fn index_to_shame_pos(index: usize) -> String {
     }
 }
 
-pub async fn team_flash_leaderboard(settings: &Settings) -> String {
-    let res = services::leetify::team_flash_leaderboard(settings).await;
-
-    match res {
-        Ok(leaderboard) => {
-            let list = leaderboard
-                .entries
-                .iter()
-                .take(10)
-                .enumerate()
-                .map(|(index, entry)| {
-                    let username = &entry.username;
-                    let pos = index_to_shame_pos(index);
-                    let value = entry.teammates_flashed_per_round;
-
-                    let thrown = entry.flashbangs_thrown_per_round;
-                    let ratio = entry.teammates_flashed_per_flash;
-
-                    format!(
-                        "{pos}: {username} ({thrown:.2} thrown, {value:.2} teammates hit / round, {ratio:.2} hit / flash)"
-                    )
-                })
-                .collect::<Vec<String>>()
-                .join("\n");
-
-            if leaderboard.entries.is_empty() {
-                return "No team flash data found. ☹️".to_string();
-            }
-
-            let avg = leaderboard.avg;
-
+fn format_team_flash_leaderboard(leaderboard: &services::leetify::TeamFlashLeaderboard) -> String {
+    if leaderboard.entries.is_empty() {
+        return "No team flash data found. ☹️".to_string();
+    }
+    let list = leaderboard
+        .entries
+        .iter()
+        .take(10)
+        .enumerate()
+        .map(|(index, entry)| {
             format!(
-                "Flashbangs per round 💥\n(thrown, teammates hit, hit / flash)\n\n{list}\n\nAvg: {thrown_avg:.2} thrown, {avg:.2} teammates hit / round, {ratio_avg:.2} hit / flash",
-                thrown_avg = leaderboard.avg_flashbangs_thrown,
-                ratio_avg = leaderboard.avg_teammates_flashed_per_flash
+                "{} {} · {:.0} hits · {:.0} thrown · {:.2} hits/flash",
+                index_to_shame_pos(index),
+                escape_html(&entry.username.to_string()),
+                entry.teammates_flashed_per_round * 100.0,
+                entry.flashbangs_thrown_per_round * 100.0,
+                entry.teammates_flashed_per_flash
             )
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch team flash leaderboard from Leetify: {}", e);
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("💥 Team flashes\nThrown and teammate hits per 100 rounds\n\n{list}\n\nGroup average · {:.0} hits · {:.0} thrown · {:.2} hits/flash", leaderboard.avg * 100.0, leaderboard.avg_flashbangs_thrown * 100.0, leaderboard.avg_teammates_flashed_per_flash)
+}
+
+pub async fn team_flash_leaderboard(settings: &Settings) -> String {
+    match services::leetify::team_flash_leaderboard(settings).await {
+        Ok(leaderboard) => format_team_flash_leaderboard(&leaderboard),
+        Err(error) => {
+            eprintln!("Failed to fetch team flash leaderboard from Leetify: {error}");
             "Failed to fetch team flash leaderboard from Leetify".to_string()
         }
     }
@@ -571,6 +624,109 @@ mod tests {
 
     fn result(result: MatchResult) -> RecentMatch {
         RecentMatch { result }
+    }
+
+    #[test]
+    fn team_flash_output_converts_both_rates_and_keeps_hits_per_flash() {
+        let leaderboard = services::leetify::TeamFlashLeaderboard {
+            entries: vec![services::leetify::TeamFlashEntry {
+                username: Username::new("Rasse".into()),
+                flashbangs_thrown_per_round: 0.75,
+                teammates_flashed_per_round: 0.22,
+                teammates_flashed_per_flash: 0.29,
+            }],
+            avg_flashbangs_thrown: 0.60,
+            avg: 0.15,
+            avg_teammates_flashed_per_flash: 0.25,
+        };
+        assert_eq!(format_team_flash_leaderboard(&leaderboard), "💥 Team flashes\nThrown and teammate hits per 100 rounds\n\n💀 Rasse · 22 hits · 75 thrown · 0.29 hits/flash\n\nGroup average · 15 hits · 60 thrown · 0.25 hits/flash");
+    }
+
+    #[test]
+    fn metric_leaderboards_keep_percentage_units_and_one_decimal() {
+        let leaderboard = services::leetify::StatLeaderboard {
+            stat_type: "opening".into(),
+            entries: vec![services::leetify::StatLeaderboardEntry {
+                username: Username::new("A&B".into()),
+                stat_value: 0.5231,
+            }],
+            avg: 0.51,
+            median: 0.52,
+        };
+        assert_eq!(
+            format_stat_leaderboard(&leaderboard, "opening"),
+            "⚔️ Opening Duels · Top 10\n\n🥇 A&amp;B · 52.3%\n\nGroup average 51.0% · Median 52.0%"
+        );
+        assert_eq!(format_stat_value("aim", 67.12), "67.1");
+    }
+
+    #[test]
+    fn premier_and_named_rank_leaderboards_have_distinct_summaries() {
+        let mut leaderboard = services::leetify::HallOfFame {
+            entries: vec![services::leetify::HallOfFameEntry {
+                username: Username::new("Rasse".into()),
+                skill_level: 15432,
+            }],
+            avg_skill_level: 13815.0,
+            median_skill_level: 14010,
+        };
+        assert_eq!(
+            format_hall_of_fame(&leaderboard, "premier"),
+            "🏆 Premier · Top 10\n\n🥇 Rasse · 15,432\n\nGroup average 13,815 · Median 14,010"
+        );
+        leaderboard.entries[0].skill_level = 13;
+        leaderboard.median_skill_level = 12;
+        assert_eq!(format_hall_of_fame(&leaderboard, "de_mirage"), "🏆 Mirage · Top 10\n\n🥇 Rasse · Master Guardian Elite\n\nGroup median · Master Guardian II");
+        assert!(format_hall_of_fame(&leaderboard, "wingman").starts_with("🏆 Wingman · Top 10"));
+    }
+
+    fn last_played_fixture() -> services::leetify::LastPlayedResult {
+        services::leetify::LastPlayedResult {
+            game: services::leetify::LeetifyGame {
+                id: Some("test".into()),
+                own_team_steam64_ids: vec![],
+                game_finished_at: chrono::DateTime::parse_from_rfc3339("2026-09-28T18:43:12Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+                map_name: "de_mirage".into(),
+                match_result: "win".into(),
+                scores: (13, 9),
+                skill_level: None,
+                teammates_flashed: None,
+                flashbangs_thrown: None,
+                rounds_count: None,
+            },
+            teammates: vec![Username::new("Alice".into()), Username::new("Bob".into())],
+            spree: None,
+        }
+    }
+
+    #[test]
+    fn last_played_shows_local_time_friendly_map_result_and_teammates() {
+        use chrono::TimeZone;
+        let now = chrono_tz::Europe::Helsinki
+            .with_ymd_and_hms(2026, 9, 30, 12, 0, 0)
+            .unwrap();
+        assert_eq!(format_last_played(&last_played_fixture(), &Username::new("Rasse".into()), now), "🎮 Rasse · Last recorded squad match\n🟩 Mirage · 13–9\n28 Sep 21:43 · 2 days ago\nWith Alice · Bob");
+    }
+
+    #[test]
+    fn inactivity_uses_local_days_keeps_streaks_and_excludes_unknowns_from_average() {
+        use chrono::TimeZone;
+        let now = chrono_tz::Europe::Helsinki
+            .with_ymd_and_hms(2026, 10, 1, 0, 30, 0)
+            .unwrap();
+        let leaderboard = services::leetify::HallOfShame {
+            entries: vec![services::leetify::HallOfShameEntry {
+                username: Username::new("Charlie".into()),
+                spree: Some(3),
+                last_played: chrono::DateTime::parse_from_rfc3339("2026-09-29T21:30:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            }],
+            unavailable: vec![Username::new("A&B".into())],
+        };
+        assert_eq!(format_hall_of_shame(&leaderboard, now), "💀 Hall of shame · Last recorded squad match\n\n🥇 Charlie · 1 day · 30 Sep · 🔥 3-day streak\n\nGroup average · 1 day\n\nUnknown: A&amp;B (no verified squad history)");
     }
 
     #[test]

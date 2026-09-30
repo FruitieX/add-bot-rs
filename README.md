@@ -25,6 +25,23 @@ make teammate records unavailable rather than silently undercounting games.
 All raster charts share the corrected glyph layout used by `/results`, including
 activity/electricity captions, axes, legends, and annotations.
 
+Rank and metric leaderboards use compact name-first rows and group summaries
+covering all successfully fetched players. Premier ratings use thousands
+separators; map and Wingman ranks show names and a named median without numeric
+tier codes. Numeric medians average the middle two values for even-sized groups;
+named-rank medians use the lower of the two middle ranks.
+
+`/teamflash` shows teammate hits and flashes thrown per 100 rounds, plus hits per
+flash, in each row and the group-average footer.
+
+`/lastplayed` shows the last verified squad match's result, map, local date/time,
+and configured teammates. `/hallofshame` measures days since that match using
+local calendar dates, retains short dates, and shows active consecutive-day
+squad streaks inline. Both verify full same-team rosters rather than treating
+shared match IDs as evidence of playing together. Unverifiable histories appear
+as unknown and are excluded from the inactivity average. These commands describe
+the available Leetify history, which may not contain an older squad match.
+
 ## Recent form themes
 
 Use `/form halloween`, `/stats burger 5`, or `/form @username panda` to choose

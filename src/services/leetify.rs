@@ -1,5 +1,6 @@
 use cached::proc_macro::cached;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
+use chrono_tz::Tz;
 use color_eyre::{eyre::eyre, Result};
 use futures::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -756,90 +757,178 @@ pub(crate) async fn average_recent_match_duration_for_configured_players(
     average_recent_match_duration(&games)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LastPlayedResult {
     pub game: LeetifyGame,
-    pub spree: usize,
+    pub teammates: Vec<Username>,
+    pub spree: Option<usize>,
 }
 
-pub fn last_played_from_leetify_games(games: &[LeetifyGame]) -> Result<LastPlayedResult> {
+fn verified_squad_game(
+    history: &LeetifyGame,
+    details: &LeetifyMatch,
+    own: &SteamID,
+    mappings: &HashMap<Username, SteamID>,
+) -> Result<Option<LastPlayedResult>> {
+    if details.teams.len() != 2 {
+        return Err(eyre!("Incomplete roster for {}", details.id));
+    }
+    let team = details
+        .teams
+        .iter()
+        .find(|team| team.steam64_ids.contains(own))
+        .ok_or_else(|| eyre!("Player missing from roster for {}", details.id))?;
+    let opponents = details
+        .teams
+        .iter()
+        .find(|team| !team.steam64_ids.contains(own))
+        .ok_or_else(|| eyre!("Opposing roster missing for {}", details.id))?;
+    let mut names = mappings
+        .iter()
+        .filter(|(_, id)| *id != own && team.steam64_ids.contains(id))
+        .collect::<Vec<_>>();
+    names.sort_by_key(|(name, _)| name.to_string());
+    let mut seen = HashSet::new();
+    let teammates = names
+        .into_iter()
+        .filter(|(_, id)| seen.insert(*id))
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    if teammates.is_empty() {
+        return Ok(None);
+    }
+    let mut game = history.clone();
+    game.id = Some(details.id.clone());
+    game.game_finished_at = details.game_finished_at;
+    game.map_name = details.map_name.clone();
+    game.own_team_steam64_ids = team.steam64_ids.clone();
+    game.scores = (team.score, opponents.score);
+    game.match_result = match team.score.cmp(&opponents.score) {
+        std::cmp::Ordering::Greater => "win",
+        std::cmp::Ordering::Less => "loss",
+        std::cmp::Ordering::Equal => "tie",
+    }
+    .to_string();
+    Ok(Some(LastPlayedResult {
+        game,
+        teammates,
+        spree: None,
+    }))
+}
+
+fn squad_playing_streak(mut dates: Vec<NaiveDate>, today: NaiveDate) -> usize {
+    dates.sort_by(|a, b| b.cmp(a));
+    dates.dedup();
+    let Some(latest) = dates.first() else {
+        return 0;
+    };
+    if (today - *latest).num_days() > 1 || *latest > today {
+        return 0;
+    }
+    dates
+        .windows(2)
+        .take_while(|pair| (pair[0] - pair[1]).num_days() == 1)
+        .count()
+        + 1
+}
+
+async fn find_last_squad_match(
+    settings: &Settings,
+    own: &SteamID,
+    games: &[LeetifyGame],
+    now: DateTime<Tz>,
+    with_streak: bool,
+) -> Result<LastPlayedResult> {
     let mut games = games.iter().collect::<Vec<_>>();
-    games.sort_by_key(|game| std::cmp::Reverse(game.game_finished_at));
-
-    let last_played = games
-        .first()
-        .map(|game| (*game).clone())
-        .ok_or_else(|| eyre!("Could not find any Leetify games"))?;
-
-    let mut unique_dates = Vec::new();
+    games.sort_by_key(|game| (std::cmp::Reverse(game.game_finished_at), game.id.clone()));
+    let mut seen = HashSet::new();
+    let mut latest = None;
+    let mut dates: Vec<NaiveDate> = Vec::new();
+    let mut streak_known = true;
     for game in games {
-        let date = game.game_finished_at.date_naive();
-        if unique_dates.last() != Some(&date) {
-            unique_dates.push(date);
+        if let Some(last_date) = dates.last() {
+            // Older matches cannot extend this active consecutive-day streak.
+            if game
+                .game_finished_at
+                .with_timezone(&now.timezone())
+                .date_naive()
+                < *last_date - chrono::Days::new(1)
+            {
+                break;
+            }
+        }
+        let Some(id) = &game.id else {
+            if latest.is_none() {
+                return Err(eyre!(
+                    "A newer match has no ID; last squad match cannot be verified"
+                ));
+            }
+            streak_known = false;
+            break;
+        };
+        if !seen.insert(id) {
+            continue;
+        }
+        // Hydrate only as far back as needed, reusing immutable match caches.
+        let hydration = get_leetify_matches(settings, HashSet::from([id.clone()])).await;
+        let verified = hydration
+            .matches
+            .get(id)
+            .ok_or_else(|| eyre!("Roster unavailable for {id}"))
+            .and_then(|details| {
+                verified_squad_game(game, details, own, &settings.players.steamid_mappings)
+            });
+        let verified = match verified {
+            Ok(value) => value,
+            Err(error) if latest.is_none() => return Err(error),
+            Err(error) => {
+                eprintln!("Cannot verify older streak history: {error}");
+                streak_known = false;
+                break;
+            }
+        };
+        if let Some(result) = verified {
+            let date = result
+                .game
+                .game_finished_at
+                .with_timezone(&now.timezone())
+                .date_naive();
+            if dates.last() != Some(&date) {
+                dates.push(date);
+            }
+            if latest.is_none() {
+                latest = Some(result);
+            }
+            if !with_streak || (now.date_naive() - dates[0]).num_days() > 1 {
+                break;
+            }
         }
     }
-
-    let today = Utc::now().date_naive();
-    let spree = if (today - unique_dates[0]).num_days() > 1 {
-        0
-    } else {
-        unique_dates
-            .windows(2)
-            .position(|pair| (pair[0] - pair[1]).num_days() > 1)
-            .map(|index| index + 1)
-            .unwrap_or(unique_dates.len())
-    };
-
-    Ok(LastPlayedResult {
-        game: last_played,
-        spree,
-    })
+    let mut latest =
+        latest.ok_or_else(|| eyre!("No verified squad match in the available history"))?;
+    latest.spree =
+        (with_streak && streak_known).then(|| squad_playing_streak(dates, now.date_naive()));
+    Ok(latest)
 }
 
-pub fn last_played_from_team_games(
-    games: &[LeetifyGame],
-    teammate_games: &[Vec<LeetifyGame>],
+pub async fn last_played(
+    settings: &Settings,
+    username: &Username,
+    tz: Tz,
 ) -> Result<LastPlayedResult> {
-    let teammate_match_ids: HashSet<&str> = teammate_games
-        .iter()
-        .flat_map(|games| games.iter())
-        .filter_map(|game| game.id.as_deref())
-        .collect();
-
-    let games_with_teammates: Vec<LeetifyGame> = games
-        .iter()
-        .filter(|game| {
-            game.id
-                .as_deref()
-                .is_some_and(|id| teammate_match_ids.contains(id))
-        })
-        .cloned()
-        .collect();
-
-    if games_with_teammates.is_empty() {
-        return Err(eyre!(
-            "Could not find any Leetify games played with teammates"
-        ));
-    }
-
-    last_played_from_leetify_games(&games_with_teammates)
-}
-
-pub async fn last_played(settings: &Settings, username: &Username) -> Result<LeetifyGame> {
     let steamid = steamid_for_username(settings.clone(), username)
-        .ok_or_else(|| eyre!(format!("No SteamID configured for user {username}")))?;
-
-    let configured_games = get_configured_player_games(settings).await;
-    let games = configured_games
-        .get(&steamid)
-        .ok_or_else(|| eyre!("Failed to fetch last played stats from Leetify"))?;
-    let teammate_games = configured_games
-        .iter()
-        .filter(|(other_steamid, _)| *other_steamid != &steamid)
-        .map(|(_, games)| games.clone())
-        .collect::<Vec<_>>();
-
-    Ok(last_played_from_team_games(games, &teammate_games)?.game)
+        .ok_or_else(|| eyre!("No SteamID configured for user {username}"))?;
+    let games = get_leetify_games(settings, &steamid)
+        .await
+        .ok_or_else(|| eyre!("Failed to fetch match history from Leetify"))?;
+    find_last_squad_match(
+        settings,
+        &steamid,
+        &games,
+        Utc::now().with_timezone(&tz),
+        false,
+    )
+    .await
 }
 
 #[allow(dead_code)]
@@ -1051,38 +1140,56 @@ pub async fn teammate_stats(settings: &Settings, username: &Username) -> Result<
 pub struct HallOfShameEntry {
     pub username: Username,
     pub last_played: DateTime<Utc>,
-    pub spree: usize,
+    pub spree: Option<usize>,
 }
 
-pub async fn hall_of_shame(settings: &Settings) -> Result<Vec<HallOfShameEntry>> {
+pub struct HallOfShame {
+    pub entries: Vec<HallOfShameEntry>,
+    pub unavailable: Vec<Username>,
+}
+
+pub async fn hall_of_shame(settings: &Settings, tz: Tz) -> Result<HallOfShame> {
     let configured_games = get_configured_player_games(settings).await;
     let mut entries = Vec::new();
-
-    for (username, steamid) in &settings.players.steamid_mappings {
-        let Some(games) = configured_games.get(steamid) else {
-            eprintln!("Failed to fetch Leetify stats for player {username}");
-            continue;
-        };
-
-        let teammate_games = configured_games
-            .iter()
-            .filter(|(other_steamid, _)| *other_steamid != steamid)
-            .map(|(_, games)| games.clone())
-            .collect::<Vec<_>>();
-
-        match last_played_from_team_games(games, &teammate_games) {
-            Ok(result) => entries.push(HallOfShameEntry {
+    let mut unavailable = Vec::new();
+    let now = Utc::now().with_timezone(&tz);
+    let mut players = settings.players.steamid_mappings.iter().collect::<Vec<_>>();
+    players.sort_by_key(|(name, _)| name.to_string());
+    let mut resolved = HashMap::<SteamID, Option<LastPlayedResult>>::new();
+    for (username, steamid) in players {
+        if !resolved.contains_key(steamid) {
+            let result = if let Some(games) = configured_games.get(steamid) {
+                match find_last_squad_match(settings, steamid, games, now, true).await {
+                    Ok(result) => Some(result),
+                    Err(error) => {
+                        eprintln!("Failed to verify squad history for {username}: {error}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            resolved.insert(steamid.clone(), result);
+        }
+        if let Some(result) = resolved.get(steamid).and_then(Option::as_ref) {
+            entries.push(HallOfShameEntry {
                 username: username.clone(),
                 last_played: result.game.game_finished_at,
                 spree: result.spree,
-            }),
-            Err(e) => eprintln!("Failed to find team match for player {username}: {e}"),
+            });
+        } else {
+            unavailable.push(username.clone());
         }
     }
-
-    entries.sort_by_key(|entry| (entry.last_played, entry.spree));
-
-    Ok(entries)
+    entries.sort_by(|a, b| {
+        a.last_played
+            .cmp(&b.last_played)
+            .then_with(|| a.username.to_string().cmp(&b.username.to_string()))
+    });
+    Ok(HallOfShame {
+        entries,
+        unavailable,
+    })
 }
 
 #[derive(Debug)]
@@ -1166,10 +1273,20 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
         entries.iter().map(|entry| entry.skill_level).sum::<u32>() as f32 / entries.len() as f32
     };
 
-    let median_skill_level = entries
-        .get(entries.len() / 2)
-        .map(|entry| entry.skill_level)
-        .unwrap_or(0);
+    let median_skill_level = if rank_type == "premier" {
+        numeric_median(
+            &entries
+                .iter()
+                .map(|entry| entry.skill_level as f32)
+                .collect::<Vec<_>>(),
+        )
+        .round() as u32
+    } else {
+        entries
+            .get(entries.len() / 2)
+            .map(|entry| entry.skill_level)
+            .unwrap_or(0)
+    };
 
     Ok(HallOfFame {
         avg_skill_level,
@@ -1192,7 +1309,20 @@ pub struct StatLeaderboard {
     pub median: f32,
 }
 
-/// List top 10 players based on a specific stat (aim, positioning, utility, opening, clutch)
+/// Median of values sorted in either ascending or descending order.
+fn numeric_median(sorted: &[f32]) -> f32 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let middle = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        (sorted[middle - 1] + sorted[middle]) / 2.0
+    } else {
+        sorted[middle]
+    }
+}
+
+/// List players based on a specific stat (aim, positioning, utility, opening, clutch).
 pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<StatLeaderboard> {
     let steamid_mappings = settings.players.steamid_mappings.clone();
 
@@ -1251,11 +1381,7 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
         stat_values.iter().sum::<f32>() / stat_values.len() as f32
     };
 
-    let median = if stat_values.is_empty() {
-        0.0
-    } else {
-        stat_values[stat_values.len() / 2]
-    };
+    let median = numeric_median(&stat_values);
 
     Ok(StatLeaderboard {
         stat_type: stat_type.to_string(),
@@ -1395,6 +1521,230 @@ mod tests {
     use std::collections::HashMap;
 
     const PUBLIC_TEST_STEAM_ID: &str = "76561198016607756";
+
+    fn squad_fixture(
+        id: &str,
+        finished: DateTime<Utc>,
+        friend_on_own_team: bool,
+    ) -> (LeetifyGame, LeetifyMatch) {
+        let own = if friend_on_own_team {
+            ["own", "friend", "bob", "u1", "u2"]
+        } else {
+            ["own", "u1", "u2", "u3", "u4"]
+        };
+        let other = if friend_on_own_team {
+            ["rival", "o1", "o2", "o3", "o4"]
+        } else {
+            ["friend", "rival", "o1", "o2", "o3"]
+        };
+        let game = LeetifyGame {
+            id: Some(id.into()),
+            own_team_steam64_ids: vec![],
+            game_finished_at: finished,
+            map_name: "de_nuke".into(),
+            match_result: "loss".into(),
+            scores: (1, 99),
+            skill_level: None,
+            teammates_flashed: None,
+            flashbangs_thrown: None,
+            rounds_count: None,
+        };
+        let details = LeetifyMatch {
+            id: id.into(),
+            game_finished_at: finished,
+            map_name: "de_mirage".into(),
+            teams: vec![
+                LeetifyMatchTeam {
+                    steam64_ids: own.map(|id| SteamID::new(id.into())).to_vec(),
+                    score: 13,
+                },
+                LeetifyMatchTeam {
+                    steam64_ids: other.map(|id| SteamID::new(id.into())).to_vec(),
+                    score: 9,
+                },
+            ],
+        };
+        (game, details)
+    }
+
+    async fn cached_squad_fixtures(
+        fixtures: &[(LeetifyGame, LeetifyMatch)],
+    ) -> (Settings, PathBuf) {
+        let directory = std::env::temp_dir().join(format!(
+            "add-bot-squad-test-{}-{}",
+            std::process::id(),
+            MATCH_CACHE_TEMP_FILE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        for (_, details) in fixtures {
+            write_match_to_disk(&directory, details).await.unwrap();
+        }
+        let settings = Settings {
+            teloxide: TeloxideSettings {
+                bot_api_token: "test".into(),
+            },
+            players: PlayersSettings {
+                steamid_mappings: [
+                    ("Player", "own"),
+                    ("Alice", "friend"),
+                    ("AliceAlias", "friend"),
+                    ("Bob", "bob"),
+                    ("Rival", "rival"),
+                ]
+                .into_iter()
+                .map(|(name, id)| (Username::new(name.into()), SteamID::new(id.into())))
+                .collect(),
+            },
+            weather: None,
+            electricity: ElectricitySettings::default(),
+            leetify: Some(crate::settings::LeetifySettings {
+                api_key: None,
+                match_cache_path: Some(directory.clone()),
+            }),
+        };
+        (settings, directory)
+    }
+
+    #[tokio::test]
+    async fn last_squad_match_ignores_opponents_and_stops_before_unused_older_history() {
+        use chrono::TimeZone;
+        let now = chrono_tz::Europe::Helsinki
+            .with_ymd_and_hms(2026, 9, 30, 23, 0, 0)
+            .unwrap();
+        let fixtures = vec![
+            squad_fixture(
+                "squad-find-newer-opponents",
+                now.with_timezone(&Utc) - chrono::Duration::hours(1),
+                false,
+            ),
+            squad_fixture(
+                "squad-find-last-teammates",
+                now.with_timezone(&Utc) - chrono::Duration::days(1),
+                true,
+            ),
+        ];
+        let (settings, directory) = cached_squad_fixtures(&fixtures).await;
+        let mut games = fixtures
+            .iter()
+            .map(|(game, _)| game.clone())
+            .collect::<Vec<_>>();
+        let mut older = games[1].clone();
+        older.id = None;
+        older.game_finished_at -= chrono::Duration::days(1);
+        games.insert(0, older);
+        let result =
+            find_last_squad_match(&settings, &SteamID::new("own".into()), &games, now, false)
+                .await
+                .unwrap();
+        assert_eq!(result.game.id.as_deref(), Some("squad-find-last-teammates"));
+        assert_eq!(
+            result
+                .teammates
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["Alice", "Bob"]
+        );
+        assert_eq!(
+            (
+                result.game.match_result.as_str(),
+                result.game.scores,
+                result.game.map_name.as_str()
+            ),
+            ("win", (13, 9), "de_mirage")
+        );
+        assert_eq!(result.spree, None);
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn squad_streak_uses_local_days_deduplicates_days_and_stops_at_a_gap() {
+        use chrono::TimeZone;
+        let now = chrono_tz::Europe::Helsinki
+            .with_ymd_and_hms(2026, 10, 1, 0, 30, 0)
+            .unwrap();
+        let timestamps = [
+            "2026-09-30T20:00:00Z",
+            "2026-09-29T21:30:00Z",
+            "2026-09-28T21:30:00Z",
+            "2026-09-27T21:30:00Z",
+        ];
+        let fixtures = timestamps
+            .iter()
+            .enumerate()
+            .map(|(index, time)| {
+                squad_fixture(
+                    &format!("squad-local-streak-{index}"),
+                    DateTime::parse_from_rfc3339(time)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    true,
+                )
+            })
+            .collect::<Vec<_>>();
+        let (settings, directory) = cached_squad_fixtures(&fixtures).await;
+        let mut games = fixtures
+            .iter()
+            .map(|(game, _)| game.clone())
+            .collect::<Vec<_>>();
+        games.push(games[0].clone());
+        let mut gap = games[0].clone();
+        gap.id = None;
+        gap.game_finished_at = DateTime::parse_from_rfc3339("2026-09-25T21:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        games.push(gap);
+        let result =
+            find_last_squad_match(&settings, &SteamID::new("own".into()), &games, now, true)
+                .await
+                .unwrap();
+        assert_eq!(result.spree, Some(3));
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unverified_newer_match_blocks_latest_but_unverified_older_match_only_hides_streak() {
+        use chrono::TimeZone;
+        let now = chrono_tz::Europe::Helsinki
+            .with_ymd_and_hms(2026, 9, 30, 23, 0, 0)
+            .unwrap();
+        let fixture = squad_fixture(
+            "squad-partial-known-latest",
+            now.with_timezone(&Utc) - chrono::Duration::hours(1),
+            true,
+        );
+        let (settings, directory) = cached_squad_fixtures(std::slice::from_ref(&fixture)).await;
+        let mut unknown = fixture.0.clone();
+        unknown.id = None;
+        unknown.game_finished_at += chrono::Duration::minutes(30);
+        assert!(find_last_squad_match(
+            &settings,
+            &SteamID::new("own".into()),
+            &[fixture.0.clone(), unknown.clone()],
+            now,
+            true
+        )
+        .await
+        .is_err());
+        unknown.game_finished_at = fixture.0.game_finished_at - chrono::Duration::days(1);
+        let result = find_last_squad_match(
+            &settings,
+            &SteamID::new("own".into()),
+            &[fixture.0, unknown],
+            now,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.spree, None);
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[test]
+    fn numeric_median_handles_even_and_odd_groups() {
+        assert_eq!(numeric_median(&[80.0, 60.0, 20.0]), 60.0);
+        assert_eq!(numeric_median(&[80.0, 60.0, 40.0, 20.0]), 50.0);
+        assert_eq!(numeric_median(&[]), 0.0);
+    }
 
     #[tokio::test]
     async fn immutable_match_cache_round_trips_minimal_match_data() {
@@ -1690,96 +2040,6 @@ mod tests {
         };
 
         assert!(average_recent_match_duration(&[game]).is_none());
-    }
-
-    #[test]
-    fn last_played_uses_newest_match_and_calculates_spree() {
-        let make_game = |finished_at: DateTime<Utc>| LeetifyGame {
-            id: None,
-            own_team_steam64_ids: vec![],
-            game_finished_at: finished_at,
-            map_name: "de_nuke".to_string(),
-            match_result: "win".to_string(),
-            scores: (13, 9),
-            skill_level: None,
-            teammates_flashed: None,
-            flashbangs_thrown: None,
-            rounds_count: None,
-        };
-        let today = Utc::now().date_naive();
-        let games = vec![
-            make_game(today.and_hms_opt(12, 0, 0).unwrap().and_utc()),
-            make_game(
-                (today - chrono::Days::new(2))
-                    .and_hms_opt(12, 0, 0)
-                    .unwrap()
-                    .and_utc(),
-            ),
-            make_game(
-                (today - chrono::Days::new(1))
-                    .and_hms_opt(12, 0, 0)
-                    .unwrap()
-                    .and_utc(),
-            ),
-        ];
-
-        let result = last_played_from_leetify_games(&games).unwrap();
-
-        assert_eq!(result.game.game_finished_at.date_naive(), today);
-        assert_eq!(result.spree, 3);
-    }
-
-    #[test]
-    fn last_played_with_team_matches_public_match_ids() {
-        let make_game = |id: &str, days_ago: u64| LeetifyGame {
-            id: Some(id.to_string()),
-            own_team_steam64_ids: vec![],
-            game_finished_at: (Utc::now().date_naive() - chrono::Days::new(days_ago))
-                .and_hms_opt(12, 0, 0)
-                .unwrap()
-                .and_utc(),
-            map_name: "de_nuke".to_string(),
-            match_result: "win".to_string(),
-            scores: (13, 9),
-            skill_level: None,
-            teammates_flashed: None,
-            flashbangs_thrown: None,
-            rounds_count: None,
-        };
-
-        let own_games = vec![
-            make_game("solo-match", 0),
-            make_game("team-match-new", 1),
-            make_game("team-match-old", 3),
-        ];
-        let teammate_games = vec![make_game("team-match-new", 1)];
-
-        let result = last_played_from_team_games(&own_games, &[teammate_games]).unwrap();
-
-        assert_eq!(result.game.id.as_deref(), Some("team-match-new"));
-    }
-
-    #[test]
-    fn last_played_with_team_rejects_games_without_a_shared_match() {
-        let make_game = |id: &str| LeetifyGame {
-            id: Some(id.to_string()),
-            own_team_steam64_ids: vec![],
-            game_finished_at: Utc::now(),
-            map_name: "de_nuke".to_string(),
-            match_result: "win".to_string(),
-            scores: (13, 9),
-            skill_level: None,
-            teammates_flashed: None,
-            flashbangs_thrown: None,
-            rounds_count: None,
-        };
-
-        let result = last_played_from_team_games(
-            &[make_game("own-match")],
-            &[vec![make_game("teammate-match")]],
-        );
-
-        assert!(result.is_err());
     }
 
     #[test]
