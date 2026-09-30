@@ -59,10 +59,46 @@ fn map_display_name(map: &str) -> String {
     }
 }
 
+fn coverage_footer(
+    coverage: &services::leetify::PlayerCoverage,
+    included: usize,
+    label: &str,
+    omitted_label: &str,
+) -> String {
+    let mut text = format!("{label}: {included}/{}", coverage.total);
+    if !coverage.omitted.is_empty() {
+        text.push_str(&format!(
+            " · {omitted_label}: {}",
+            coverage
+                .omitted
+                .iter()
+                .map(|n| escape_html(n))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ));
+    }
+    if !coverage.unavailable.is_empty() {
+        text.push_str(&format!(
+            "\nUnavailable: {}",
+            coverage
+                .unavailable
+                .iter()
+                .map(|n| escape_html(n))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ));
+    }
+    text
+}
+
 fn format_hall_of_fame(leaderboard: &services::leetify::HallOfFame, rank_type: &str) -> String {
     let name = map_display_name(rank_type);
     if leaderboard.entries.is_empty() {
-        return format!("No entries found for {}. ☹️", escape_html(&name));
+        return format!(
+            "No ranked players for {}.\n{}",
+            escape_html(&name),
+            coverage_footer(&leaderboard.coverage, 0, "Ranked", "Unranked")
+        );
     }
     let premier = rank_type == "premier";
     let list = leaderboard
@@ -96,7 +132,16 @@ fn format_hall_of_fame(leaderboard: &services::leetify::HallOfFame, rank_type: &
             skill_level_to_cs2_rank(leaderboard.median_skill_level)
         )
     };
-    format!("🏆 {} · Top 10\n\n{list}\n\n{summary}", escape_html(&name))
+    format!(
+        "🏆 {} · Top 10\nConfigured players · Leetify\n\n{list}\n\n{summary}\n{}",
+        escape_html(&name),
+        coverage_footer(
+            &leaderboard.coverage,
+            leaderboard.entries.len(),
+            "Ranked",
+            "Unranked"
+        )
+    )
 }
 
 pub async fn hall_of_fame(settings: &Settings, rank_type: String) -> String {
@@ -547,7 +592,10 @@ fn format_stat_leaderboard(
 ) -> String {
     let name = stat_type_display_name(stat_type);
     if leaderboard.entries.is_empty() {
-        return format!("No entries found for {name}. ☹️");
+        return format!(
+            "No usable {name} ratings.\n{}",
+            coverage_footer(&leaderboard.coverage, 0, "Included", "No usable rating")
+        );
     }
     let list = leaderboard
         .entries
@@ -565,10 +613,11 @@ fn format_stat_leaderboard(
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{} {name} · Top 10\n\n{list}\n\nGroup average {} · Median {}",
+        "{} {name} · Top 10\nConfigured players · Leetify\n\n{list}\n\nGroup average {} · Median {}\n{}",
         stat_icon(stat_type),
         format_stat_value(stat_type, leaderboard.avg),
-        format_stat_value(stat_type, leaderboard.median)
+        format_stat_value(stat_type, leaderboard.median),
+        coverage_footer(&leaderboard.coverage, leaderboard.entries.len(), "Included", "No usable rating")
     )
 }
 
@@ -593,7 +642,10 @@ fn index_to_shame_pos(index: usize) -> String {
 
 fn format_team_flash_leaderboard(leaderboard: &services::leetify::TeamFlashLeaderboard) -> String {
     if leaderboard.entries.is_empty() {
-        return "No team flash data found. ☹️".to_string();
+        return format!(
+            "No usable team flash data.\n{}",
+            coverage_footer(&leaderboard.coverage, 0, "Included", "No usable rounds")
+        );
     }
     let list = leaderboard
         .entries
@@ -612,7 +664,7 @@ fn format_team_flash_leaderboard(leaderboard: &services::leetify::TeamFlashLeade
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("💥 Team flashes\nThrown and teammate hits per 100 rounds\n\n{list}\n\nGroup average · {:.0} hits · {:.0} thrown · {:.2} hits/flash", leaderboard.avg * 100.0, leaderboard.avg_flashbangs_thrown * 100.0, leaderboard.avg_teammates_flashed_per_flash)
+    format!("💥 Team flashes\nThrown and teammate hits per 100 rounds\nConfigured players · Leetify\n\n{list}\n\nGroup average · {:.0} hits · {:.0} thrown · {:.2} hits/flash\n{}", leaderboard.avg * 100.0, leaderboard.avg_flashbangs_thrown * 100.0, leaderboard.avg_teammates_flashed_per_flash, coverage_footer(&leaderboard.coverage, leaderboard.entries.len(), "Included", "No usable rounds"))
 }
 
 pub async fn team_flash_leaderboard(settings: &Settings) -> String {
@@ -635,8 +687,29 @@ mod tests {
     }
 
     #[test]
+    fn coverage_footer_names_missing_players_without_calling_them_zero() {
+        let coverage = services::leetify::PlayerCoverage {
+            total: 4,
+            omitted: vec!["Charlie".into()],
+            unavailable: vec!["A&B".into()],
+        };
+        assert_eq!(
+            coverage_footer(&coverage, 2, "Ranked", "Unranked"),
+            "Ranked: 2/4 · Unranked: Charlie\nUnavailable: A&amp;B"
+        );
+        assert_eq!(
+            coverage_footer(&coverage, 0, "Included", "No usable rounds"),
+            "Included: 0/4 · No usable rounds: Charlie\nUnavailable: A&amp;B"
+        );
+    }
+
+    #[test]
     fn team_flash_output_converts_both_rates_and_keeps_hits_per_flash() {
         let leaderboard = services::leetify::TeamFlashLeaderboard {
+            coverage: services::leetify::PlayerCoverage {
+                total: 1,
+                ..Default::default()
+            },
             entries: vec![services::leetify::TeamFlashEntry {
                 username: Username::new("Rasse".into()),
                 flashbangs_thrown_per_round: 0.75,
@@ -647,12 +720,16 @@ mod tests {
             avg: 0.15,
             avg_teammates_flashed_per_flash: 0.25,
         };
-        assert_eq!(format_team_flash_leaderboard(&leaderboard), "💥 Team flashes\nThrown and teammate hits per 100 rounds\n\n💀 Rasse · 22 hits · 75 thrown · 0.29 hits/flash\n\nGroup average · 15 hits · 60 thrown · 0.25 hits/flash");
+        assert_eq!(format_team_flash_leaderboard(&leaderboard), "💥 Team flashes\nThrown and teammate hits per 100 rounds\nConfigured players · Leetify\n\n💀 Rasse · 22 hits · 75 thrown · 0.29 hits/flash\n\nGroup average · 15 hits · 60 thrown · 0.25 hits/flash\nIncluded: 1/1");
     }
 
     #[test]
     fn metric_leaderboards_keep_percentage_units_and_one_decimal() {
         let leaderboard = services::leetify::StatLeaderboard {
+            coverage: services::leetify::PlayerCoverage {
+                total: 1,
+                ..Default::default()
+            },
             stat_type: "opening".into(),
             entries: vec![services::leetify::StatLeaderboardEntry {
                 username: Username::new("A&B".into()),
@@ -663,7 +740,7 @@ mod tests {
         };
         assert_eq!(
             format_stat_leaderboard(&leaderboard, "opening"),
-            "⚔️ Opening Duels · Top 10\n\n🥇 A&amp;B · 52.3%\n\nGroup average 51.0% · Median 52.0%"
+            "⚔️ Opening Duels · Top 10\nConfigured players · Leetify\n\n🥇 A&amp;B · 52.3%\n\nGroup average 51.0% · Median 52.0%\nIncluded: 1/1"
         );
         assert_eq!(format_stat_value("aim", 67.12), "67.1");
     }
@@ -671,6 +748,10 @@ mod tests {
     #[test]
     fn premier_and_named_rank_leaderboards_have_distinct_summaries() {
         let mut leaderboard = services::leetify::HallOfFame {
+            coverage: services::leetify::PlayerCoverage {
+                total: 1,
+                ..Default::default()
+            },
             entries: vec![services::leetify::HallOfFameEntry {
                 username: Username::new("Rasse".into()),
                 skill_level: 15432,
@@ -680,11 +761,11 @@ mod tests {
         };
         assert_eq!(
             format_hall_of_fame(&leaderboard, "premier"),
-            "🏆 Premier · Top 10\n\n🥇 Rasse · 15,432\n\nGroup average 13,815 · Median 14,010"
+            "🏆 Premier · Top 10\nConfigured players · Leetify\n\n🥇 Rasse · 15,432\n\nGroup average 13,815 · Median 14,010\nRanked: 1/1"
         );
         leaderboard.entries[0].skill_level = 13;
         leaderboard.median_skill_level = 12;
-        assert_eq!(format_hall_of_fame(&leaderboard, "de_mirage"), "🏆 Mirage · Top 10\n\n🥇 Rasse · Master Guardian Elite\n\nGroup median · Master Guardian II");
+        assert_eq!(format_hall_of_fame(&leaderboard, "de_mirage"), "🏆 Mirage · Top 10\nConfigured players · Leetify\n\n🥇 Rasse · Master Guardian Elite\n\nGroup median · Master Guardian II\nRanked: 1/1");
         assert!(format_hall_of_fame(&leaderboard, "wingman").starts_with("🏆 Wingman · Top 10"));
     }
 

@@ -5,7 +5,9 @@ use super::{
 };
 use std::collections::{HashMap, HashSet};
 
-use chrono::{Duration, NaiveDate, Utc};
+use crate::command::ActivityStyle;
+use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono_tz::Tz;
 use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
@@ -38,9 +40,245 @@ fn game_key(game: &LeetifyGame) -> String {
     })
 }
 
+struct CalendarData {
+    start: NaiveDate,
+    counts: Vec<u32>,
+    players: Vec<(String, usize)>,
+}
+
+fn calendar_data(
+    per_player: &[(String, Vec<LeetifyGame>)],
+    games: Vec<LeetifyGame>,
+    target: Option<&Username>,
+    tz: Tz,
+    today: NaiveDate,
+) -> CalendarData {
+    let start = today - Duration::days(89);
+    let mut counts = vec![0; 90];
+    let mut selected = HashSet::new();
+    for game in games {
+        let day = game.game_finished_at.with_timezone(&tz).date_naive();
+        if day >= start && day <= today && selected.insert(game_key(&game)) {
+            counts[(day - start).num_days() as usize] += 1;
+        }
+    }
+    let mut players = per_player
+        .iter()
+        .map(|(name, games)| {
+            let keys = games
+                .iter()
+                .filter(|game| {
+                    let day = game.game_finished_at.with_timezone(&tz).date_naive();
+                    day >= start && day <= today && selected.contains(&game_key(game))
+                })
+                .map(game_key)
+                .collect::<HashSet<_>>();
+            (name.clone(), keys.len())
+        })
+        .filter(|(_, count)| *count > 0)
+        .collect::<Vec<_>>();
+    players.sort_by(|a, b| {
+        let is_target = |name: &str| target.is_some_and(|target| target.to_string() == name);
+        is_target(&b.0)
+            .cmp(&is_target(&a.0))
+            .then(b.1.cmp(&a.1))
+            .then(a.0.cmp(&b.0))
+    });
+    CalendarData {
+        start,
+        counts,
+        players,
+    }
+}
+
+fn render_calendar(
+    per_player: &[(String, Vec<LeetifyGame>)],
+    games: Vec<LeetifyGame>,
+    target: Option<&Username>,
+    notice: Option<&str>,
+    tz: Tz,
+    today: NaiveDate,
+) -> Result<Vec<u8>> {
+    let data = calendar_data(per_player, games, target, tz, today);
+    let rows = data.players.len().min(10).div_ceil(2);
+    let height = 990 + rows as u32 * 44;
+    let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
+    {
+        let root = ChartBackend(BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)))
+            .into_drawing_area();
+        chart_style::frame(&root)?;
+        chart_style::text(&root, "Match activity", (100, 86), 46, INK, true)?;
+        let scope = target
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "Configured players".into());
+        chart_style::text(
+            &root,
+            &chart_style::fit_text(
+                &format!(
+                    "{scope} · {}–{} · 90 days · {tz}",
+                    data.start.format("%-d %b"),
+                    today.format("%-d %b %Y")
+                ),
+                22,
+                1300,
+            ),
+            (100, 150),
+            22,
+            MUTED,
+            false,
+        )?;
+        if let Some(notice) = notice {
+            chart_style::text(
+                &root,
+                &chart_style::fit_text(notice, 18, 1300),
+                (100, 180),
+                18,
+                MUTED,
+                false,
+            )?;
+        }
+        for (x, value, label) in [
+            (100, data.counts.iter().sum::<u32>(), "RECORDED MATCHES"),
+            (
+                590,
+                data.counts.iter().filter(|n| **n > 0).count() as u32,
+                "ACTIVE DAYS",
+            ),
+            (
+                1080,
+                *data.counts.iter().max().unwrap_or(&0),
+                "BUSIEST DAY · MATCHES",
+            ),
+        ] {
+            chart_style::text(&root, &value.to_string(), (x, 210), 46, INK, true)?;
+            chart_style::text(&root, label, (x, 270), 20, MUTED, true)?;
+        }
+        let monday =
+            data.start - Duration::days(data.start.weekday().num_days_from_monday() as i64);
+        for (row, day) in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            .iter()
+            .enumerate()
+        {
+            chart_style::text(&root, day, (100, 355 + row as i32 * 52), 20, MUTED, false)?;
+        }
+        let peak = data.counts.iter().copied().max().unwrap_or(1).max(1);
+        let shade = |count: u32| {
+            if count == 0 {
+                return RGBColor(235, 240, 243);
+            }
+            let t = 0.25 + 0.75 * count as f64 / peak as f64;
+            RGBColor(
+                (220.0 - 195.0 * t) as u8,
+                (240.0 - 92.0 * t) as u8,
+                (235.0 - 99.0 * t) as u8,
+            )
+        };
+        let mut months = std::collections::BTreeMap::new();
+        for (index, count) in data.counts.iter().enumerate() {
+            let day = data.start + Duration::days(index as i64);
+            let column = (day - monday).num_days() / 7;
+            let x = 200 + column as i32 * 82;
+            let y = 350 + day.weekday().num_days_from_monday() as i32 * 52;
+            root.draw(&Rectangle::new(
+                [(x, y), (x + 70, y + 42)],
+                shade(*count).filled(),
+            ))?;
+            if day.day() == 1 || index == 0 {
+                months.insert(x, day.format("%b").to_string());
+            }
+        }
+        for (x, month) in months {
+            chart_style::text(&root, &month, (x, 312), 20, MUTED, false)?;
+        }
+        chart_style::text(
+            &root,
+            &data.start.format("%-d %b").to_string(),
+            (200, 735),
+            18,
+            MUTED,
+            false,
+        )?;
+        chart_style::text(
+            &root,
+            &today.format("%-d %b").to_string(),
+            (1250, 735),
+            18,
+            MUTED,
+            false,
+        )?;
+        chart_style::text(&root, "Fewer", (960, 785), 18, MUTED, false)?;
+        for index in 0..5 {
+            let t = 0.25 + 0.75 * index as f64 / 4.0;
+            let color = if index == 0 {
+                shade(0)
+            } else {
+                RGBColor(
+                    (220.0 - 195.0 * t) as u8,
+                    (240.0 - 92.0 * t) as u8,
+                    (235.0 - 99.0 * t) as u8,
+                )
+            };
+            let x = 1035 + index * 42;
+            root.draw(&Rectangle::new([(x, 785), (x + 30, 815)], color.filled()))?;
+        }
+        chart_style::text(&root, "More", (1260, 785), 18, MUTED, false)?;
+        chart_style::text(
+            &root,
+            if target.is_some() {
+                "RECORDED MATCHES WITH THIS PLAYER"
+            } else {
+                "RECORDED MATCHES BY PLAYER · TOP 10"
+            },
+            (100, 850),
+            20,
+            INK,
+            true,
+        )?;
+        for (index, (name, count)) in data.players.iter().take(10).enumerate() {
+            let x = 100 + (index % 2) as i32 * 650;
+            let text = format!("{} · {count}", chart_style::fit_text(name, 22, 500));
+            chart_style::text(
+                &root,
+                &text,
+                (x, 900 + (index / 2) as i32 * 44),
+                22,
+                INK,
+                false,
+            )?;
+        }
+        chart_style::text(
+            &root,
+            "Shared matches counted once; player totals overlap for shared matches.",
+            (100, height as i32 - 90),
+            18,
+            MUTED,
+            false,
+        )?;
+        chart_style::text(
+            &root,
+            "Available Leetify history; older matches may be missing.",
+            (100, height as i32 - 60),
+            18,
+            MUTED,
+            false,
+        )?;
+        root.present()?;
+    }
+    let image = image::RgbImage::from_raw(WIDTH, height, buffer)
+        .ok_or_else(|| eyre!("Invalid image buffer"))?;
+    let mut bytes = Vec::new();
+    image.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )?;
+    Ok(bytes)
+}
+
 pub async fn get_activity_chart(
     settings: &Settings,
     filter_user: Option<&Username>,
+    tz: Tz,
+    style: ActivityStyle,
 ) -> Result<Vec<u8>> {
     if let Some(user) = filter_user {
         if !settings.players.steamid_mappings.contains_key(user) {
@@ -79,7 +317,39 @@ pub async fn get_activity_chart(
             histories.unavailable.join(" · ")
         )
     });
-    render_activity_with_notice(histories.games, all_games, filter_user, notice.as_deref())
+    match style {
+        ActivityStyle::Calendar => render_calendar(
+            &histories.games,
+            all_games,
+            filter_user,
+            notice.as_deref(),
+            tz,
+            Utc::now().with_timezone(&tz).date_naive(),
+        ),
+        ActivityStyle::Bars => render_activity_bars(
+            histories.games,
+            all_games,
+            filter_user,
+            notice.as_deref(),
+            tz,
+        ),
+    }
+}
+
+#[cfg(test)]
+fn render_activity_with_notice(
+    per_player_games: Vec<(String, Vec<LeetifyGame>)>,
+    all_games: Vec<LeetifyGame>,
+    filter_user: Option<&Username>,
+    notice: Option<&str>,
+) -> Result<Vec<u8>> {
+    render_activity_bars(
+        per_player_games,
+        all_games,
+        filter_user,
+        notice,
+        chrono_tz::UTC,
+    )
 }
 
 #[cfg(test)]
@@ -91,20 +361,21 @@ fn render_activity_chart(
     render_activity_with_notice(per_player_games, all_games, filter_user, None)
 }
 
-fn render_activity_with_notice(
+fn render_activity_bars(
     per_player_games: Vec<(String, Vec<LeetifyGame>)>,
     all_games: Vec<LeetifyGame>,
     filter_user: Option<&Username>,
     notice: Option<&str>,
+    tz: Tz,
 ) -> Result<Vec<u8>> {
     if all_games.is_empty() {
         return Err(DataFailure::NoMatches(filter_user.cloned()).into());
     }
 
-    let today = Utc::now().date_naive();
+    let today = Utc::now().with_timezone(&tz).date_naive();
     // Window length (adjust here to change chart span)
     let span_days = 90;
-    let start = today - Duration::days(span_days);
+    let start = today - Duration::days(span_days - 1);
 
     // Deduplicate games across players using the public API's match ID.
     let mut seen: HashSet<String> = HashSet::new();
@@ -114,7 +385,7 @@ fn render_activity_with_notice(
         if !seen.insert(key.clone()) {
             continue;
         }
-        let d = g.game_finished_at.date_naive();
+        let d = g.game_finished_at.with_timezone(&tz).date_naive();
         if d >= start && d <= today {
             *counts.entry(d).or_insert(0) += 1;
         }
@@ -147,7 +418,7 @@ fn render_activity_with_notice(
 
             for g in filtered_games.iter() {
                 let key = game_key(g);
-                let d = g.game_finished_at.date_naive();
+                let d = g.game_finished_at.with_timezone(&tz).date_naive();
 
                 if d >= start && d <= today && seen_global_games.insert(key.clone()) {
                     // Add the filtered user into the day's participants
@@ -181,7 +452,7 @@ fn render_activity_with_notice(
         for (_username, games) in per_player_games.iter() {
             for g in games.iter() {
                 let key = game_key(g);
-                let d = g.game_finished_at.date_naive();
+                let d = g.game_finished_at.with_timezone(&tz).date_naive();
 
                 if d >= start && d <= today && seen_global_games.insert(key.clone()) {
                     // For each unique game, find ALL configured players who participated
@@ -213,7 +484,7 @@ fn render_activity_with_notice(
             if !seen_player.insert(key.clone()) {
                 continue;
             }
-            let d = g.game_finished_at.date_naive();
+            let d = g.game_finished_at.with_timezone(&tz).date_naive();
             if d >= start && d <= today {
                 *map.entry(d).or_insert(0) += 1;
             }
@@ -237,7 +508,7 @@ fn render_activity_with_notice(
     for (username, games) in per_player_games.iter() {
         let mut keys: HashSet<String> = HashSet::new();
         for g in games.iter() {
-            let d = g.game_finished_at.date_naive();
+            let d = g.game_finished_at.with_timezone(&tz).date_naive();
             if d < start || d > today {
                 continue;
             }
@@ -332,7 +603,7 @@ fn render_activity_with_notice(
             &root,
             &chart_style::fit_text(
                 &format!(
-                    "{scope}  ·  {} – {}  ·  UTC dates",
+                    "{scope}  ·  {} – {}  ·  90 days · {tz}",
                     start.format("%-d %b %Y"),
                     today.format("%-d %b %Y")
                 ),
@@ -530,7 +801,7 @@ fn render_activity_with_notice(
         }
         chart_style::text(
             &root,
-            "Colors mark participants; segment sizes are not player match totals.",
+            "Colors mark participants; segments are not player match totals. Available history may omit older matches.",
             (100, height as i32 - 65),
             18,
             MUTED,
@@ -556,6 +827,54 @@ fn render_activity_with_notice(
 mod tests {
     use super::*;
 
+    fn sample_game(id: &str, time: &str) -> LeetifyGame {
+        serde_json::from_value(serde_json::json!({ "id": id, "ownTeamSteam64Ids": [], "gameFinishedAt": time, "mapName": "de_nuke", "matchResult": "win", "scores": [13,9], "skillLevel": null })).unwrap()
+    }
+
+    #[test]
+    fn calendar_uses_ninety_local_dates_and_true_overlapping_player_totals() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        let midnight = sample_game("midnight", "2026-09-29T22:30:00Z");
+        let start = sample_game("start", "2026-07-02T21:30:00Z");
+        let old = sample_game("old", "2026-07-02T20:30:00Z");
+        let future = sample_game("future", "2026-09-30T21:30:00Z");
+        let other = sample_game("other", "2026-09-28T12:00:00Z");
+        let alice = vec![midnight.clone(), start.clone(), old.clone(), future.clone()];
+        let bob = vec![midnight.clone(), other.clone()];
+        let players = vec![("Alice".into(), alice.clone()), ("Bob".into(), bob.clone())];
+        let all = alice.iter().chain(&bob).cloned().collect();
+        let data = calendar_data(&players, all, None, chrono_tz::Europe::Helsinki, today);
+        assert_eq!(data.start, NaiveDate::from_ymd_opt(2026, 7, 3).unwrap());
+        assert_eq!(data.counts.len(), 90);
+        assert_eq!(data.counts[0], 1);
+        assert_eq!(data.counts[89], 1);
+        assert_eq!(data.counts.iter().sum::<u32>(), 3);
+        assert_eq!(data.players, vec![("Alice".into(), 2), ("Bob".into(), 2)]);
+        let selected = calendar_data(
+            &players,
+            alice,
+            Some(&Username::new("Alice".into())),
+            chrono_tz::Europe::Helsinki,
+            today,
+        );
+        assert_eq!(
+            selected.players,
+            vec![("Alice".into(), 2), ("Bob".into(), 1)]
+        );
+        assert_eq!(selected.counts.iter().sum::<u32>(), 2);
+    }
+
+    #[test]
+    fn calendar_groups_both_instances_of_a_dst_hour_on_the_same_local_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let games = vec![
+            sample_game("first", "2026-10-25T00:30:00Z"),
+            sample_game("second", "2026-10-25T01:30:00Z"),
+        ];
+        let data = calendar_data(&[], games, None, chrono_tz::Europe::Helsinki, today);
+        assert_eq!(data.counts[89], 2);
+    }
+
     #[test]
     #[ignore = "writes sample charts for manual visual review"]
     fn write_activity_preview() {
@@ -578,7 +897,41 @@ mod tests {
         }
         let bob = games.iter().step_by(2).cloned().collect::<Vec<_>>();
         let players = vec![("Alice".into(), games.clone()), ("Bob".into(), bob.clone())];
-        let all_games = games.iter().chain(&bob).cloned().collect();
+        let today = Utc::now()
+            .with_timezone(&chrono_tz::Europe::Helsinki)
+            .date_naive();
+        let all_games: Vec<_> = games.iter().chain(&bob).cloned().collect();
+        std::fs::write(
+            "target/activity-calendar-preview.png",
+            render_calendar(
+                &players,
+                all_games.clone(),
+                None,
+                None,
+                chrono_tz::Europe::Helsinki,
+                today,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            "target/activity-calendar-player-preview.png",
+            render_calendar(
+                &players,
+                games.clone(),
+                Some(&Username::new("Alice".into())),
+                Some("Partial history · unavailable for: Charlie"),
+                chrono_tz::Europe::Helsinki,
+                today,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            "target/activity-calendar-empty-preview.png",
+            render_calendar(&[], vec![], None, None, chrono_tz::Europe::Helsinki, today).unwrap(),
+        )
+        .unwrap();
         let chart = render_activity_chart(players.clone(), all_games, None).unwrap();
         std::fs::write("target/activity-preview.png", chart).unwrap();
         let chart =
@@ -596,7 +949,20 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let players = (0..12).map(|index| (format!("Player {index:02} with an exceptionally long display name for layout review"),games.clone())).collect();
+        let players: Vec<_> = (0..12).map(|index| (format!("Player {index:02} with an exceptionally long display name for layout review"),games.clone())).collect();
+        std::fs::write(
+            "target/activity-calendar-long-names-preview.png",
+            render_calendar(
+                &players,
+                games.clone(),
+                None,
+                None,
+                chrono_tz::Europe::Helsinki,
+                today,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         std::fs::write(
             "target/activity-long-names-preview.png",
             render_activity_chart(players, games, None).unwrap(),

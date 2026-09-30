@@ -337,6 +337,7 @@ struct PredictionStats {
     observed_ties: usize,
     unique_observations: usize,
     unique_matches: usize,
+    decisive_matches: usize,
 }
 
 fn observation_weight(
@@ -677,8 +678,10 @@ fn build_team_observations_from_matches(
 fn aggregate_prediction(observations: &[TeamObservation]) -> Option<PredictionStats> {
     let mut stats = PredictionStats::default();
     let mut unique_matches = HashSet::new();
+    let mut decisive_matches = HashSet::new();
 
     for observation in observations {
+        unique_matches.insert(observation.match_id.clone());
         match observation.result {
             PredictionResult::Win => {
                 stats.observed_wins += 1;
@@ -694,8 +697,8 @@ fn aggregate_prediction(observations: &[TeamObservation]) -> Option<PredictionSt
             }
         }
 
+        decisive_matches.insert(observation.match_id.clone());
         stats.unique_observations += 1;
-        unique_matches.insert(observation.match_id.clone());
     }
 
     if stats.wins + stats.losses == 0 {
@@ -703,6 +706,7 @@ fn aggregate_prediction(observations: &[TeamObservation]) -> Option<PredictionSt
     }
 
     stats.unique_matches = unique_matches.len();
+    stats.decisive_matches = decisive_matches.len();
     Some(stats)
 }
 
@@ -715,14 +719,17 @@ fn has_failed_hydration(
         .any(|match_id| failed_match_ids.contains(match_id))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct QueuePrediction {
+    unavailable: Vec<String>,
+    reason: Option<&'static str>,
     available_histories: usize,
+    unique_matches: usize,
     stats: Option<PredictionStats>,
 }
 
 impl QueuePrediction {
-    fn predicted_winrate(self) -> Option<u8> {
+    fn predicted_winrate(&self) -> Option<u8> {
         self.stats
             .map(|stats| win_percentage(stats.wins, stats.losses).round() as u8)
     }
@@ -749,29 +756,51 @@ fn format_prediction_line(
     queue_id: &QueueId,
     queue_size: usize,
     player_count: usize,
-    available_histories: usize,
-    stats: Option<PredictionStats>,
+    prediction: &QueuePrediction,
 ) -> String {
-    let coverage = if available_histories < player_count {
-        format!(" · {available_histories}/{player_count} histories available")
+    let available_histories = prediction.available_histories;
+    let stats = prediction.stats;
+    let reason = prediction.reason;
+    let unavailable = &prediction.unavailable;
+    let heading = format!("<b>{queue_id}</b> · {player_count}/{queue_size} players");
+    let coverage = format!("Histories: {available_histories}/{player_count}");
+    let match_label = if prediction.unique_matches == 1 {
+        "match"
     } else {
-        String::new()
+        "matches"
     };
-
+    let missing = if unavailable.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nUnavailable: {}",
+            unavailable
+                .iter()
+                .map(|name| crate::util::escape_html(name))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        )
+    };
     match stats {
         None => format!(
-            "- <b>{queue_id}</b> · <b>{player_count}/{queue_size} players</b>{coverage}\n  Prediction unavailable"
+            "{heading}\nPrediction unavailable · {}\n{coverage} · {} verified unique {match_label}{missing}",
+            reason.unwrap_or("no usable decisive matches"), prediction.unique_matches
         ),
         Some(stats) => {
-            let observed_win_percentage = win_percentage(stats.observed_wins, stats.observed_losses);
-            let lineup_aware_win_percentage = win_percentage(stats.wins, stats.losses);
-
-            format!(
-                "- <b>{queue_id}</b> · <b>{player_count}/{queue_size} players</b>{coverage}\n  <b>Recent results:</b> {}W / {}L / {}T ({observed_win_percentage:.0}%)\n  <b>Predicted win rate:</b> {lineup_aware_win_percentage:.0}%",
-                stats.observed_wins,
-                stats.observed_losses,
-                stats.observed_ties,
-            )
+            let observed = win_percentage(stats.observed_wins, stats.observed_losses);
+            let predicted = win_percentage(stats.wins, stats.losses);
+            let small = if stats.decisive_matches < 10 {
+                " · Small sample"
+            } else {
+                ""
+            };
+            let results = stats.observed_wins + stats.observed_losses + stats.observed_ties;
+            let sides = if results > stats.unique_matches {
+                format!(" · {results} team results (opposing sides counted separately)")
+            } else {
+                String::new()
+            };
+            format!("{heading}\nRecent results: {}W/{}L/{}T · {observed:.0}%\n<b>Predicted winrate:</b> {predicted:.0}%\n{coverage} · {} unique {match_label}{small}{sides}{missing}", stats.observed_wins, stats.observed_losses, stats.observed_ties, stats.unique_matches)
         }
     }
 }
@@ -916,6 +945,24 @@ async fn predict_queue_states(
                 };
 
                 QueuePrediction {
+                    unique_matches: observations.iter().map(|observation| &observation.match_id).collect::<HashSet<_>>().len(),
+                    unavailable: players.iter().filter(|username| !player_steam_ids.get(*username).is_some_and(|id| histories.contains_key(id))).map(|username| {
+                        if player_steam_ids.contains_key(username) { username.to_string() }
+                        else { format!("{username} (Steam unlinked)") }
+                    }).collect(),
+                    reason: if has_failed_hydration(candidate_match_ids, &hydration.failed_match_ids) {
+                        Some("match details unavailable")
+                    } else if players.is_empty() {
+                        Some("no active players")
+                    } else if players.iter().all(|username| !player_steam_ids.contains_key(username)) {
+                        Some("Steam accounts not linked")
+                    } else if available_histories == 0 {
+                        Some("player histories unavailable")
+                    } else if observations.is_empty() {
+                        Some("no verified matches in available history")
+                    } else if stats.is_none() {
+                        Some("no wins or losses in available history")
+                    } else { None },
                     available_histories,
                     stats,
                 }
@@ -964,20 +1011,14 @@ pub async fn predictions(
         .zip(queue_predictions.iter())
         .map(|((queue_id, queue), prediction)| {
             let players = queue.get_players().0;
-            format_prediction_line(
-                queue_id,
-                queue.size(),
-                players.len(),
-                prediction.available_histories,
-                prediction.stats,
-            )
+            format_prediction_line(queue_id, queue.size(), players.len(), prediction)
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
 
     let match_label = if match_count == 1 { "match" } else { "matches" };
     format!(
-        "<b>Predicted win rates for current queues</b>\n<i>Based on each player's latest {match_count} {match_label}</i>\n\n{queue_lines}"
+        "<b>🎮 Predictions · Current queues</b>\nUp to {match_count} recent {match_label} per player · Leetify\n\n{queue_lines}\n\nEstimate weighted by lineup overlap."
     )
 }
 
@@ -1706,21 +1747,91 @@ mod tests {
             &QueueId::new("20:15".to_string()),
             5,
             1,
-            1,
-            Some(PredictionStats {
-                wins: 70,
-                losses: 75,
-                observed_wins: 14,
-                observed_losses: 15,
-                observed_ties: 1,
-                unique_observations: 29,
-                unique_matches: 29,
-            }),
+            &QueuePrediction {
+                available_histories: 1,
+                unique_matches: 30,
+                stats: Some(PredictionStats {
+                    wins: 70,
+                    losses: 75,
+                    observed_wins: 14,
+                    observed_losses: 15,
+                    observed_ties: 1,
+                    unique_observations: 29,
+                    unique_matches: 30,
+                    decisive_matches: 29,
+                }),
+                reason: None,
+                unavailable: vec![],
+            },
         );
 
         assert_eq!(
             line,
-            "- <b>20:15</b> · <b>1/5 players</b>\n  <b>Recent results:</b> 14W / 15L / 1T (48%)\n  <b>Predicted win rate:</b> 48%"
+            "<b>20:15</b> · 1/5 players\nRecent results: 14W/15L/1T · 48%\n<b>Predicted winrate:</b> 48%\nHistories: 1/1 · 30 unique matches"
+        );
+    }
+
+    #[test]
+    fn prediction_samples_count_shared_matches_once_and_include_ties() {
+        let queue = vec![steam_id("A"), steam_id("B")];
+        let histories = histories(vec![
+            (
+                "A",
+                vec![
+                    game("opponents", &["A"], "win", 1),
+                    game("tied", &["A", "B"], "tie", 2),
+                ],
+            ),
+            (
+                "B",
+                vec![
+                    game("opponents", &["B"], "loss", 1),
+                    game("tied", &["A", "B"], "tie", 2),
+                ],
+            ),
+        ]);
+        let stats = prediction_stats(&queue, &histories).unwrap();
+        assert_eq!(stats.unique_matches, 2);
+        assert_eq!(stats.decisive_matches, 1);
+        let line = format_prediction_line(
+            &QueueId::new("20:15".into()),
+            5,
+            2,
+            &QueuePrediction {
+                available_histories: 1,
+                unique_matches: 2,
+                stats: Some(stats),
+                reason: None,
+                unavailable: vec!["A&B".into()],
+            },
+        );
+        assert!(line.contains("Histories: 1/2 · 2 unique matches · Small sample"));
+        assert!(line.contains("Unavailable: A&amp;B"));
+        let unavailable = format_prediction_line(
+            &QueueId::new("20:15".into()),
+            5,
+            2,
+            &QueuePrediction {
+                available_histories: 2,
+                unique_matches: 2,
+                stats: None,
+                reason: Some("match details unavailable"),
+                unavailable: vec![],
+            },
+        );
+        assert!(unavailable.contains("Prediction unavailable · match details unavailable"));
+        assert!(!unavailable.contains("0%"));
+        let tied = QueuePrediction {
+            available_histories: 2,
+            unique_matches: 1,
+            stats: None,
+            reason: Some("no wins or losses in available history"),
+            unavailable: vec![],
+        };
+        assert_eq!(tied.predicted_winrate(), None);
+        assert!(
+            format_prediction_line(&QueueId::new("20:15".into()), 5, 2, &tied)
+                .contains("Histories: 2/2 · 1 verified unique match")
         );
     }
 

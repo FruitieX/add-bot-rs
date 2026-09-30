@@ -1248,33 +1248,56 @@ pub struct HallOfFameEntry {
 }
 
 pub struct HallOfFame {
+    pub coverage: PlayerCoverage,
     pub entries: Vec<HallOfFameEntry>,
     pub avg_skill_level: f32,
     pub median_skill_level: u32,
 }
 
-/// Keep an all-failed lookup distinct from a successful lookup with no entries.
-fn collect_player_entries<T>(results: Vec<Result<Option<T>>>) -> Result<Vec<T>> {
+#[derive(Debug, Default)]
+pub struct PlayerCoverage {
+    pub total: usize,
+    pub unavailable: Vec<String>,
+    pub omitted: Vec<String>,
+}
+
+fn collect_covered_entries<T>(
+    results: Vec<(Username, Result<Option<T>>)>,
+) -> Result<(Vec<T>, PlayerCoverage)> {
+    let mut coverage = PlayerCoverage {
+        total: results.len(),
+        ..Default::default()
+    };
     let mut entries = Vec::new();
     let mut failure = None;
-    for result in results {
+    let mut successful = false;
+    for (name, result) in results {
         match result {
-            Ok(Some(entry)) => entries.push(entry),
-            Ok(None) => {}
+            Ok(Some(entry)) => {
+                successful = true;
+                entries.push(entry);
+            }
+            Ok(None) => {
+                successful = true;
+                coverage.omitted.push(name.to_string());
+            }
             Err(error) => {
-                eprintln!("Player data unavailable: {error:?}");
+                log::warn!("Player data unavailable for {name}: {error:?}");
+                coverage.unavailable.push(name.to_string());
                 if failure.is_none() {
                     failure = Some(error);
                 }
             }
         }
     }
-    if entries.is_empty() {
+    coverage.omitted.sort();
+    coverage.unavailable.sort();
+    if !successful {
         if let Some(error) = failure {
             return Err(error);
         }
     }
-    Ok(entries)
+    Ok((entries, coverage))
 }
 
 /// List top 10 players based on their skill level in their most recent game
@@ -1291,28 +1314,35 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
             let settings = settings.clone();
 
             async move {
-                let resp = get_leetify_mini_profile_checked(&settings, &steamid).await?;
+                let name = username.clone();
+                let result = async move {
+                    let resp = get_leetify_mini_profile_checked(&settings, &steamid).await?;
 
-                let leetify_rank = resp.ranks.iter().find(|r| {
-                    if rank_type == "wingman" {
-                        r.data_source.as_deref() == Some("matchmaking_wingman")
-                    } else {
-                        r.data_source.as_deref() == Some("matchmaking")
-                            && r.r#type.as_ref() == Some(&rank_type)
-                    }
-                });
-                let skill_level = leetify_rank.and_then(|r| r.skill_level);
+                    let leetify_rank = resp.ranks.iter().find(|r| {
+                        if rank_type == "wingman" {
+                            r.data_source.as_deref() == Some("matchmaking_wingman")
+                        } else {
+                            r.data_source.as_deref() == Some("matchmaking")
+                                && r.r#type.as_ref() == Some(&rank_type)
+                        }
+                    });
+                    let skill_level = leetify_rank.and_then(|r| r.skill_level);
 
-                let Some(skill_level) = skill_level else {
-                    eprintln!("Failed to find {rank_type} rank for player {username}");
+                    let Some(skill_level) = skill_level
+                        .filter(|level| *level > 0 && (rank_type != "premier" || *level >= 1000))
+                    else {
+                        eprintln!("Failed to find {rank_type} rank for player {username}");
 
-                    return Ok(None);
-                };
+                        return Ok(None);
+                    };
 
-                Ok(Some(HallOfFameEntry {
-                    username: username.clone(),
-                    skill_level,
-                }))
+                    Ok(Some(HallOfFameEntry {
+                        username: username.clone(),
+                        skill_level,
+                    }))
+                }
+                .await;
+                (name, result)
             }
         })
         .collect();
@@ -1324,7 +1354,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
     // wait for all futures to complete
     let tasks_results = stream.collect::<Vec<_>>().await;
 
-    let mut entries: Vec<HallOfFameEntry> = collect_player_entries(tasks_results)?;
+    let (mut entries, coverage) = collect_covered_entries(tasks_results)?;
 
     // Don't include players with no rank
     entries.retain(|entry| entry.skill_level != 0);
@@ -1359,6 +1389,7 @@ pub async fn hall_of_fame(settings: &Settings, rank_type: &String) -> Result<Hal
     };
 
     Ok(HallOfFame {
+        coverage,
         avg_skill_level,
         median_skill_level,
         entries,
@@ -1373,6 +1404,7 @@ pub struct StatLeaderboardEntry {
 
 #[allow(dead_code)]
 pub struct StatLeaderboard {
+    pub coverage: PlayerCoverage,
     pub stat_type: String,
     pub entries: Vec<StatLeaderboardEntry>,
     pub avg: f32,
@@ -1406,21 +1438,26 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
             let settings = settings.clone();
 
             async move {
-                let resp = get_leetify_mini_profile_checked(&settings, &steamid).await?;
+                let name = username.clone();
+                let result = async move {
+                    let resp = get_leetify_mini_profile_checked(&settings, &steamid).await?;
 
-                let stat_value = match stat_type.as_str() {
-                    "aim" => resp.ratings.aim,
-                    "positioning" => resp.ratings.positioning,
-                    "utility" => resp.ratings.utility,
-                    "opening" => resp.ratings.opening,
-                    "clutch" => resp.ratings.clutch,
-                    _ => return Ok(None),
-                };
+                    let stat_value = match stat_type.as_str() {
+                        "aim" => resp.ratings.aim,
+                        "positioning" => resp.ratings.positioning,
+                        "utility" => resp.ratings.utility,
+                        "opening" => resp.ratings.opening,
+                        "clutch" => resp.ratings.clutch,
+                        _ => return Ok(None),
+                    };
 
-                Ok(Some(StatLeaderboardEntry {
-                    username: username.clone(),
-                    stat_value,
-                }))
+                    Ok(Some(StatLeaderboardEntry {
+                        username: username.clone(),
+                        stat_value,
+                    }))
+                }
+                .await;
+                (name, result)
             }
         })
         .collect();
@@ -1432,7 +1469,7 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
     // wait for all futures to complete
     let tasks_results = stream.collect::<Vec<_>>().await;
 
-    let mut entries: Vec<StatLeaderboardEntry> = collect_player_entries(tasks_results)?;
+    let (mut entries, coverage) = collect_covered_entries(tasks_results)?;
 
     // Sort by stat value, highest first
     entries.sort_by(|a, b| {
@@ -1451,6 +1488,7 @@ pub async fn stat_leaderboard(settings: &Settings, stat_type: &str) -> Result<St
     let median = numeric_median(&stat_values);
 
     Ok(StatLeaderboard {
+        coverage,
         stat_type: stat_type.to_string(),
         entries,
         avg,
@@ -1467,6 +1505,7 @@ pub struct TeamFlashEntry {
 }
 
 pub struct TeamFlashLeaderboard {
+    pub coverage: PlayerCoverage,
     pub entries: Vec<TeamFlashEntry>,
     pub avg_flashbangs_thrown: f32,
     pub avg: f32,
@@ -1486,47 +1525,52 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
             let settings = settings.clone();
 
             async move {
-                let games = get_leetify_games_checked(&settings, &steamid).await?;
+                let name = username.clone();
+                let result = async move {
+                    let games = get_leetify_games_checked(&settings, &steamid).await?;
 
-                // The public API exposes total flashbangs thrown, friendly flash hits, and round counts per match.
-                let (thrown, flashes, rounds) =
-                    games
-                        .iter()
-                        .fold((0u32, 0u32, 0u32), |(thrown, flashes, rounds), game| {
-                            (
-                                thrown + game.flashbangs_thrown.unwrap_or_default(),
-                                flashes + game.teammates_flashed.unwrap_or_default(),
-                                rounds + game.rounds_count.unwrap_or_default(),
-                            )
-                        });
-                let rates = (rounds > 0).then(|| {
-                    (
-                        thrown as f32 / rounds as f32,
-                        flashes as f32 / rounds as f32,
-                        if thrown > 0 {
-                            flashes as f32 / thrown as f32
-                        } else {
-                            0.0
-                        },
-                    )
-                });
+                    // The public API exposes total flashbangs thrown, friendly flash hits, and round counts per match.
+                    let (thrown, flashes, rounds) =
+                        games
+                            .iter()
+                            .fold((0u32, 0u32, 0u32), |(thrown, flashes, rounds), game| {
+                                (
+                                    thrown + game.flashbangs_thrown.unwrap_or_default(),
+                                    flashes + game.teammates_flashed.unwrap_or_default(),
+                                    rounds + game.rounds_count.unwrap_or_default(),
+                                )
+                            });
+                    let rates = (rounds > 0).then(|| {
+                        (
+                            thrown as f32 / rounds as f32,
+                            flashes as f32 / rounds as f32,
+                            if thrown > 0 {
+                                flashes as f32 / thrown as f32
+                            } else {
+                                0.0
+                            },
+                        )
+                    });
 
-                let Some((
-                    flashbangs_thrown_per_round,
-                    teammates_flashed_per_round,
-                    teammates_flashed_per_flash,
-                )) = rates
-                else {
-                    eprintln!("Failed to find flashbang rates for player {username}");
-                    return Ok(None);
-                };
+                    let Some((
+                        flashbangs_thrown_per_round,
+                        teammates_flashed_per_round,
+                        teammates_flashed_per_flash,
+                    )) = rates
+                    else {
+                        eprintln!("Failed to find flashbang rates for player {username}");
+                        return Ok(None);
+                    };
 
-                Ok(Some(TeamFlashEntry {
-                    username: username.clone(),
-                    flashbangs_thrown_per_round,
-                    teammates_flashed_per_round,
-                    teammates_flashed_per_flash,
-                }))
+                    Ok(Some(TeamFlashEntry {
+                        username: username.clone(),
+                        flashbangs_thrown_per_round,
+                        teammates_flashed_per_round,
+                        teammates_flashed_per_flash,
+                    }))
+                }
+                .await;
+                (name, result)
             }
         })
         .collect();
@@ -1534,7 +1578,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
     let stream = futures::stream::iter(futures).buffer_unordered(3);
     let tasks_results = stream.collect::<Vec<_>>().await;
 
-    let mut entries: Vec<TeamFlashEntry> = collect_player_entries(tasks_results)?;
+    let (mut entries, coverage) = collect_covered_entries(tasks_results)?;
 
     // Sort by teammates flashed, highest first (most team flashes = "winner" of hall of shame)
     entries.sort_by(|a, b| {
@@ -1572,6 +1616,7 @@ pub async fn team_flash_leaderboard(settings: &Settings) -> Result<TeamFlashLead
     };
 
     Ok(TeamFlashLeaderboard {
+        coverage,
         entries,
         avg_flashbangs_thrown,
         avg,
@@ -1588,23 +1633,30 @@ mod tests {
     const PUBLIC_TEST_STEAM_ID: &str = "76561198016607756";
 
     #[test]
-    fn failed_player_lookups_are_not_reported_as_successful_empty_leaderboards() {
-        assert!(
-            collect_player_entries::<u32>(vec![Err(DataFailure::PrivateProfile.into())]).is_err()
-        );
-        assert!(collect_player_entries::<u32>(vec![Ok(None)])
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            collect_player_entries(vec![Ok(Some(42)), Err(DataFailure::PrivateProfile.into())])
-                .unwrap(),
-            vec![42]
-        );
-        assert!(collect_player_entries::<u32>(vec![
-            Ok(None),
-            Err(DataFailure::PrivateProfile.into())
+    fn coverage_preserves_unranked_failed_and_zero_valued_players() {
+        let name = |name: &str| Username::new(name.to_owned());
+        let (entries, coverage) = collect_covered_entries(vec![
+            (name("Alice"), Ok(Some(0))),
+            (name("Charlie"), Ok(None)),
+            (name("Dave"), Err(DataFailure::PrivateProfile.into())),
         ])
+        .unwrap();
+        assert_eq!(entries, vec![0]);
+        assert_eq!(coverage.total, 3);
+        assert_eq!(coverage.omitted, vec!["Charlie"]);
+        assert_eq!(coverage.unavailable, vec!["Dave"]);
+        assert!(collect_covered_entries::<u32>(vec![(
+            name("Dave"),
+            Err(DataFailure::PrivateProfile.into())
+        )])
         .is_err());
+        let (entries, coverage) = collect_covered_entries::<u32>(vec![
+            (name("Charlie"), Ok(None)),
+            (name("Dave"), Err(DataFailure::PrivateProfile.into())),
+        ])
+        .unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(coverage.unavailable, vec!["Dave"]);
     }
 
     #[test]
@@ -1664,12 +1716,17 @@ mod tests {
             last_played(&settings, &name, chrono_tz::UTC)
                 .await
                 .unwrap_err(),
-            crate::services::results::get_results_chart(&settings, Some(&name))
+            crate::services::results::get_results_chart(&settings, Some(&name), chrono_tz::UTC)
                 .await
                 .unwrap_err(),
-            crate::services::activity::get_activity_chart(&settings, Some(&name))
-                .await
-                .unwrap_err(),
+            crate::services::activity::get_activity_chart(
+                &settings,
+                Some(&name),
+                chrono_tz::UTC,
+                crate::command::ActivityStyle::Calendar,
+            )
+            .await
+            .unwrap_err(),
         ] {
             assert!(matches!(
                 error.downcast_ref::<DataFailure>(),
@@ -1678,12 +1735,17 @@ mod tests {
         }
         settings.players.steamid_mappings.clear();
         for error in [
-            crate::services::results::get_results_chart(&settings, None)
+            crate::services::results::get_results_chart(&settings, None, chrono_tz::UTC)
                 .await
                 .unwrap_err(),
-            crate::services::activity::get_activity_chart(&settings, None)
-                .await
-                .unwrap_err(),
+            crate::services::activity::get_activity_chart(
+                &settings,
+                None,
+                chrono_tz::UTC,
+                crate::command::ActivityStyle::Calendar,
+            )
+            .await
+            .unwrap_err(),
         ] {
             assert!(matches!(
                 error.downcast_ref::<DataFailure>(),

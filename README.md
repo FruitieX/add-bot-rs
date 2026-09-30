@@ -45,18 +45,43 @@ make teammate records unavailable rather than silently undercounting games.
 All raster charts share the corrected glyph layout used by `/results`, including
 activity/electricity captions, axes, legends, and annotations.
 They also share a light background, rounded white card, typography, and muted
-labels. Activity adds match/active-day/busiest-day summaries and moves player
-legends below the plot. Its existing participant segments remain equal shares
-of each day's total; the legend shows recorded counts separately.
+labels. `/activity` defaults to a calendar heatmap of unique recorded matches
+per day, with match/active-day/busiest-day summaries and separate player totals.
+Shared matches count once in the calendar; individual totals overlap. Targeted
+activity shows that player's matches and counts shared matches with other
+configured players, without claiming they were on the same team.
+
+The original segmented bar chart remains available through `/activity bars`
+or `/activity @username bars` (either argument order works). Its participant
+segments remain equal shares of each day's total; the legend shows actual
+recorded counts separately.
+
+Results and both activity styles cover exactly 90 calendar dates, including
+today, using the bot's `--tz` timezone (for example `--tz Europe/Helsinki`; the
+default remains UTC). Charts show their scope, timezone, and available-history
+limitation inside the image. They default to all configured players; add
+`@username` for an individual view. Global results omit shared matches where
+configured players faced each other, including tied games verified from team
+rosters. Shared ties with unavailable rosters are omitted with an explanation.
+Individual results include that player's opposing-player matches normally.
 
 Rank and metric leaderboards use compact name-first rows and group summaries
 covering all successfully fetched players. Premier ratings use thousands
 separators; map and Wingman ranks show names and a named median without numeric
 tier codes. Numeric medians average the middle two values for even-sized groups;
-named-rank medians use the lower of the two middle ranks.
+named-rank medians use the lower of the two middle ranks. Coverage footers
+distinguish unavailable profiles, unranked players, and unusable flash samples
+from valid zero values; summaries include only eligible entries.
 
 `/teamflash` shows teammate hits and flashes thrown per 100 rounds, plus hits per
 flash, in each row and the group-average footer.
+
+`/predict` retains `Predicted winrate:` and explains that the estimate weights
+lineup overlap. Each queue shows history coverage and unique match count; fewer
+than 10 unique decisive matches gets a small-sample label. Ties count towards
+the sample but not the percentage. When queued players faced each other, team
+results are counted separately while the unique-match count counts the match
+once. Queue join/leave messages retain their existing before/after comparison.
 
 `/lastplayed` shows the last verified squad match's result, map, local date/time,
 and configured teammates. `/hallofshame` measures days since that match using

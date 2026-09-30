@@ -6,8 +6,10 @@ use crate::{services::activity::get_activity_chart, settings::Settings, types::U
 pub async fn get_activity_inputfile(
     settings: &Settings,
     for_user: Option<&Username>,
+    tz: chrono_tz::Tz,
+    style: crate::command::ActivityStyle,
 ) -> Result<InputFile> {
-    let chart_bytes = get_activity_chart(settings, for_user).await?;
+    let chart_bytes = get_activity_chart(settings, for_user, tz, style).await?;
     let inputfile = InputFile::memory(chart_bytes);
     Ok(inputfile)
 }

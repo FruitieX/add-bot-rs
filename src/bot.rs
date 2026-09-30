@@ -139,8 +139,9 @@ async fn handle_cmd_inner(
             send_photo(&bot, &chat_id, photo).await;
             return Some(());
         }
-        Command::Activity { for_user } => {
-            let photo = match get_activity_inputfile(&settings, for_user.as_ref()).await {
+        Command::Activity { for_user, style } => {
+            let photo = match get_activity_inputfile(&settings, for_user.as_ref(), tz, style).await
+            {
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch activity chart: {}", e);
@@ -158,7 +159,7 @@ async fn handle_cmd_inner(
             return Some(());
         }
         Command::Results { for_user } => {
-            let photo = match get_results_inputfile(&settings, for_user.as_ref()).await {
+            let photo = match get_results_inputfile(&settings, for_user.as_ref(), tz).await {
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch results chart: {}", e);

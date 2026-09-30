@@ -1,5 +1,6 @@
 use super::failure::DataFailure;
-use std::collections::{HashSet, VecDeque};
+use chrono_tz::Tz;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use color_eyre::{eyre::eyre, Result};
@@ -14,7 +15,10 @@ use crate::{
     services::{
         chart_style::{BORDER, INK, MUTED, WIDTH},
         chart_text::layout_text,
-        leetify::{collect_player_histories, get_leetify_games_checked, LeetifyGame},
+        leetify::{
+            collect_player_histories, get_leetify_games_checked, get_leetify_matches, LeetifyGame,
+            LeetifyMatchHydration,
+        },
     },
     settings::Settings,
     types::Username,
@@ -61,6 +65,8 @@ struct TrendPoint {
 }
 
 struct ResultsData {
+    tz: Tz,
+    exclusions: String,
     start: NaiveDate,
     end: NaiveDate,
     daily: Vec<Vec<usize>>,
@@ -73,11 +79,18 @@ fn win_rate(counts: [u32; 3]) -> Option<f64> {
     (decided > 0).then(|| 100.0 * counts[0] as f64 / decided as f64)
 }
 
-fn collect_results(mut games: Vec<LeetifyGame>, today: NaiveDate) -> ResultsData {
+#[cfg(test)]
+fn collect_results(games: Vec<LeetifyGame>, today: NaiveDate) -> ResultsData {
+    collect_results_local(games, today, chrono_tz::UTC)
+}
+
+fn collect_results_local(mut games: Vec<LeetifyGame>, today: NaiveDate, tz: Tz) -> ResultsData {
     let start = today - Duration::days(DAYS_SHOWN as i64 - 1);
     let end = today + Duration::days(1);
     games.sort_by_key(|game| (game.game_finished_at, game_key(game)));
     let mut data = ResultsData {
+        tz,
+        exclusions: String::new(),
         start,
         end,
         daily: vec![Vec::new(); DAYS_SHOWN],
@@ -91,7 +104,7 @@ fn collect_results(mut games: Vec<LeetifyGame>, today: NaiveDate) -> ResultsData
         let Some(result) = result_index(&game.match_result.to_ascii_lowercase()) else {
             continue;
         };
-        let date = game.game_finished_at.date_naive();
+        let date = game.game_finished_at.with_timezone(&tz).date_naive();
         if date >= end || !seen.insert(game_key(&game)) {
             continue;
         }
@@ -125,9 +138,62 @@ fn collect_results(mut games: Vec<LeetifyGame>, today: NaiveDate) -> ResultsData
     data
 }
 
+fn shared_ids(histories: &[(String, Vec<LeetifyGame>)]) -> HashSet<String> {
+    let mut counts = HashMap::new();
+    for (_, games) in histories {
+        let ids = games.iter().map(game_key).collect::<HashSet<_>>();
+        for id in ids {
+            *counts.entry(id).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(id, count)| (count > 1).then_some(id))
+        .collect()
+}
+
+fn excluded_ids(
+    histories: &[(String, Vec<LeetifyGame>)],
+    hydration: &LeetifyMatchHydration,
+    configured: &HashSet<crate::types::SteamID>,
+) -> (HashSet<String>, HashSet<String>) {
+    let shared = shared_ids(histories);
+    let mut opposing = HashSet::new();
+    let mut unverified = HashSet::new();
+    for id in shared {
+        let results = histories
+            .iter()
+            .flat_map(|(_, games)| games.iter())
+            .filter(|game| game_key(game) == id)
+            .filter_map(|game| result_index(&game.match_result.to_ascii_lowercase()))
+            .collect::<HashSet<_>>();
+        if results.len() > 1 {
+            opposing.insert(id);
+        } else if let Some(game) = hydration.matches.get(&id) {
+            if game
+                .teams
+                .iter()
+                .filter(|team| {
+                    team.steam64_ids
+                        .iter()
+                        .any(|player| configured.contains(player))
+                })
+                .count()
+                > 1
+            {
+                opposing.insert(id);
+            }
+        } else if results.contains(&2) {
+            unverified.insert(id);
+        }
+    }
+    (opposing, unverified)
+}
+
 pub async fn get_results_chart(
     settings: &Settings,
     filter_user: Option<&Username>,
+    tz: Tz,
 ) -> Result<Vec<u8>> {
     let mut players = settings
         .players
@@ -152,10 +218,59 @@ pub async fn get_results_chart(
     });
     let histories =
         collect_player_histories(futures::future::join_all(requests).await, filter_user)?;
+    let today = Utc::now().with_timezone(&tz).date_naive();
+    let shared = if filter_user.is_none() {
+        // Opposing wins/losses are evident from the profile outcomes. Shared
+        // ties need rosters because both teams have the same outcome. Hydrate
+        // only those matches rather than fetching every shared match again.
+        let shared = shared_ids(&histories.games);
+        histories
+            .games
+            .iter()
+            .flat_map(|(_, games)| games.iter())
+            .filter(|game| result_index(&game.match_result.to_ascii_lowercase()) == Some(2))
+            .filter_map(|game| game.id.clone())
+            .filter(|id| shared.contains(id))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let hydration = get_leetify_matches(settings, shared).await;
+    let configured = settings
+        .players
+        .steamid_mappings
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let (opposing, unverified) = excluded_ids(&histories.games, &hydration, &configured);
+    let mut excluded = HashSet::new();
+    let mut unknown = HashSet::new();
     let games = histories
         .games
-        .into_iter()
-        .flat_map(|(_, games)| games)
+        .iter()
+        .flat_map(|(_, games)| games.iter())
+        .filter(|game| {
+            if filter_user.is_some() {
+                return true;
+            }
+            let key = game_key(game);
+            let day = game.game_finished_at.with_timezone(&tz).date_naive();
+            let shown = day >= today - Duration::days(89) && day <= today;
+            if opposing.contains(&key) {
+                if shown {
+                    excluded.insert(key);
+                }
+                return false;
+            }
+            if unverified.contains(&key) {
+                if shown {
+                    unknown.insert(key);
+                }
+                return false;
+            }
+            true
+        })
+        .cloned()
         .collect();
     let notice = (!histories.unavailable.is_empty()).then(|| {
         format!(
@@ -163,11 +278,32 @@ pub async fn get_results_chart(
             histories.unavailable.join(" · ")
         )
     });
-    render_results_with_notice(
-        &collect_results(games, Utc::now().date_naive()),
-        filter_user,
-        notice.as_deref(),
-    )
+    let mut data = collect_results_local(games, today, tz);
+    let mut notes = Vec::new();
+    if !excluded.is_empty() {
+        notes.push(format!(
+            "Excluded: {} {} with configured players on opposing teams",
+            excluded.len(),
+            if excluded.len() == 1 {
+                "match"
+            } else {
+                "matches"
+            }
+        ));
+    }
+    if !unknown.is_empty() {
+        notes.push(format!(
+            "Omitted: {} shared {} with unavailable team details",
+            unknown.len(),
+            if unknown.len() == 1 {
+                "match"
+            } else {
+                "matches"
+            }
+        ));
+    }
+    data.exclusions = notes.join(" · ");
+    render_results_with_notice(&data, filter_user, notice.as_deref())
 }
 
 fn text(
@@ -235,7 +371,7 @@ fn render_results_with_notice(
 ) -> Result<Vec<u8>> {
     let rows = data.daily.iter().map(Vec::len).max().unwrap_or(0).max(4);
     let legend_y = TILE_TOP + rows as i32 * TILE_STEP + 28;
-    let height = (legend_y + 90) as u32;
+    let height = (legend_y + 130) as u32;
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)).into_drawing_area();
@@ -247,9 +383,10 @@ fn render_results_with_notice(
         text(
             &root,
             &format!(
-                "{user}  ·  {} – {}  ·  {DAYS_SHOWN} days",
+                "{user}  ·  {} – {}  ·  {DAYS_SHOWN} days · {}",
                 data.start.format("%d %b %Y"),
-                (data.end - Duration::days(1)).format("%d %b %Y")
+                (data.end - Duration::days(1)).format("%d %b %Y"),
+                data.tz
             ),
             (100, 150),
             22,
@@ -482,7 +619,7 @@ fn render_results_with_notice(
         text(&root, "EVERY MATCH", (LEFT, 901), 23, INK, HPos::Left)?;
         text(
             &root,
-            "Same dates as above · one square per match · blank days mean no games",
+            "Same dates as above · one square per match · blank days mean no recorded matches",
             (LEFT, 935),
             19,
             MUTED,
@@ -525,6 +662,28 @@ fn render_results_with_notice(
             "Matches within each day run top to bottom"
         };
         text(&root, note, (RIGHT, legend_y), 17, MUTED, HPos::Right)?;
+        text(
+            &root,
+            if filter_user.is_some() {
+                "Available Leetify history; older matches may be missing."
+            } else {
+                "Shared matches counted once · Available Leetify history; older matches may be missing."
+            },
+            (LEFT, legend_y + 35),
+            17,
+            MUTED,
+            HPos::Left,
+        )?;
+        if !data.exclusions.is_empty() {
+            text(
+                &root,
+                &super::chart_style::fit_text(&data.exclusions, 17, (RIGHT - LEFT) as u32),
+                (LEFT, legend_y + 62),
+                17,
+                MUTED,
+                HPos::Left,
+            )?;
+        }
         root.present()?;
     }
     let image = image::RgbImage::from_raw(WIDTH, height, buffer)
@@ -558,6 +717,110 @@ mod tests {
             "skillLevel": null
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn results_group_matches_using_the_selected_local_calendar() {
+        let mut midnight = game(1, today() - Duration::days(1), 22, "win");
+        let local =
+            collect_results_local(vec![midnight.clone()], today(), chrono_tz::Europe::Helsinki);
+        let utc = collect_results(vec![midnight.clone()], today());
+        assert_eq!(local.daily[89], vec![0]);
+        assert_eq!(utc.daily[88], vec![0]);
+        midnight.game_finished_at = (today() - Duration::days(90))
+            .and_hms_opt(22, 30, 0)
+            .unwrap()
+            .and_utc();
+        assert_eq!(
+            collect_results_local(vec![midnight.clone()], today(), chrono_tz::Europe::Helsinki)
+                .totals,
+            [1, 0, 0]
+        );
+        assert_eq!(collect_results(vec![midnight], today()).totals, [0, 0, 0]);
+        let dst = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let first = game(2, dst, 0, "win");
+        let second = game(3, dst, 1, "loss");
+        assert_eq!(
+            collect_results_local(vec![first, second], dst, chrono_tz::Europe::Helsinki).daily[89],
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn global_results_exclude_opponents_even_when_the_shared_match_is_tied() {
+        use crate::services::leetify::{LeetifyMatch, LeetifyMatchTeam};
+        use crate::types::SteamID;
+        let alice = SteamID::new("alice".into());
+        let bob = SteamID::new("bob".into());
+        let configured = HashSet::from([alice.clone(), bob.clone()]);
+        let win = game(1, today(), 12, "win");
+        let loss = game(1, today(), 12, "loss");
+        let tie = game(2, today(), 13, "tie");
+        let shared_win = game(3, today(), 14, "win");
+        let unknown = game(4, today(), 15, "tie");
+        let histories = vec![
+            (
+                "Alice".into(),
+                vec![
+                    win.clone(),
+                    tie.clone(),
+                    shared_win.clone(),
+                    unknown.clone(),
+                ],
+            ),
+            (
+                "Bob".into(),
+                vec![loss, tie.clone(), shared_win.clone(), unknown],
+            ),
+        ];
+        let make_match = |id: usize, opposing: bool| LeetifyMatch {
+            id: format!("match-{id}"),
+            game_finished_at: win.game_finished_at,
+            map_name: "de_nuke".into(),
+            teams: vec![
+                LeetifyMatchTeam {
+                    steam64_ids: if opposing {
+                        vec![alice.clone()]
+                    } else {
+                        vec![alice.clone(), bob.clone()]
+                    },
+                    score: 12,
+                },
+                LeetifyMatchTeam {
+                    steam64_ids: if opposing {
+                        vec![bob.clone()]
+                    } else {
+                        vec![SteamID::new("outside".into())]
+                    },
+                    score: 12,
+                },
+            ],
+        };
+        let hydration = LeetifyMatchHydration {
+            matches: HashMap::from([
+                ("match-2".into(), make_match(2, true)),
+                ("match-3".into(), make_match(3, false)),
+            ]),
+            failed_match_ids: HashSet::from(["match-1".into(), "match-4".into()]),
+        };
+        let (opponents, unknown) = excluded_ids(&histories, &hydration, &configured);
+        assert_eq!(
+            opponents,
+            HashSet::from(["match-1".into(), "match-2".into()])
+        );
+        assert_eq!(unknown, HashSet::from(["match-4".into()]));
+        let selected = histories
+            .iter()
+            .flat_map(|(_, games)| games.iter())
+            .filter(|g| !opponents.contains(&game_key(g)) && !unknown.contains(&game_key(g)))
+            .cloned()
+            .collect();
+        assert_eq!(collect_results(selected, today()).totals, [1, 0, 0]);
+        // The same opposing matches are valid results in an individual view.
+        assert_eq!(
+            collect_results(histories[0].1.clone(), today()).totals,
+            [2, 0, 2]
+        );
     }
 
     #[test]
@@ -831,7 +1094,19 @@ mod tests {
         std::fs::write(
             "target/results-partial-preview.png",
             render_results_with_notice(
-                &collect_results(games, today()),
+                &collect_results(games.clone(), today()),
+                None,
+                Some("Partial history · unavailable for: Alice · Bob"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut local = collect_results_local(games, today(), chrono_tz::Europe::Helsinki);
+        local.exclusions = "Excluded: 2 matches with configured players on opposing teams · Omitted: 1 shared match with unavailable team details".into();
+        std::fs::write(
+            "target/results-local-exclusions-preview.png",
+            render_results_with_notice(
+                &local,
                 None,
                 Some("Partial history · unavailable for: Alice · Bob"),
             )

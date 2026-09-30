@@ -25,7 +25,9 @@ Use any HHMM time for a timed queue. Predictions use the latest 30 matches;
 /lastplayed — Last verified squad match and teammates.
 /stats — Leetify stats and recent form.
 /form — Recent match form.
-/activity — Daily games over the last 90 days.
+/activity — Calendar of recorded games over the last 90 days.
+/activity bars — Original daily bar chart.
+/activity @username bars — Original bar chart for a player.
 /results — Win-rate trend and results over the last 90 days.
 
 Player stats default to yourself; add <code>@username</code> to view another player.
@@ -101,6 +103,13 @@ pub enum RecentFormStyle {
     Car,
     Traffic,
     Custom([String; 3]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActivityStyle {
+    #[default]
+    Calendar,
+    Bars,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +190,7 @@ pub enum Command {
     /// Daily games played chart for last 90 days (optionally filter by @username)
     Activity {
         for_user: Option<Username>,
+        style: ActivityStyle,
     },
 
     /// Win-rate trend and match results for last 90 days (optionally filter by @username)
@@ -607,8 +617,35 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
             "sahko" | "el" | "elpriser" => Some(Command::Sahko),
 
             "activity" | "games" | "played" | "daily" => {
-                let for_user = target_arg(args)?;
-                Some(Command::Activity { for_user })
+                let mut for_user = None;
+                let mut style = None;
+                for token in args.as_deref().unwrap_or("").split_whitespace() {
+                    match token {
+                        "bars" | "calendar" if style.is_none() => {
+                            style = Some(if token == "bars" {
+                                ActivityStyle::Bars
+                            } else {
+                                ActivityStyle::Calendar
+                            })
+                        }
+                        target if for_user.is_none() => {
+                            for_user =
+                                Some(parse_username_arg(target.to_owned()).ok_or_else(|| {
+                                    argument_error("Use /activity [@username] [bars|calendar].")
+                                })?)
+                        }
+                        _ => {
+                            return Err(argument_error(
+                                "Use /activity [@username] [bars|calendar].",
+                            )
+                            .into())
+                        }
+                    }
+                }
+                Some(Command::Activity {
+                    for_user,
+                    style: style.unwrap_or_default(),
+                })
             }
 
             "results" => {
@@ -768,6 +805,47 @@ mod tests {
             parse_cmd("/results @username").unwrap(),
             Some(Command::Results { for_user: Some(_) })
         ));
+    }
+
+    #[test]
+    fn activity_keeps_bars_available_with_either_argument_order() {
+        for text in ["/activity", "/activity calendar"] {
+            assert!(matches!(
+                parse_cmd(text).unwrap(),
+                Some(Command::Activity {
+                    for_user: None,
+                    style: ActivityStyle::Calendar
+                })
+            ));
+        }
+        for text in [
+            "/activity @username bars",
+            "/activity bars @username",
+            "/games bars @username",
+        ] {
+            assert!(matches!(
+                parse_cmd(text).unwrap(),
+                Some(Command::Activity {
+                    for_user: Some(_),
+                    style: ActivityStyle::Bars
+                })
+            ));
+        }
+        assert!(matches!(
+            parse_cmd("/activity bars").unwrap(),
+            Some(Command::Activity {
+                for_user: None,
+                style: ActivityStyle::Bars
+            })
+        ));
+        for text in [
+            "/activity bars calendar",
+            "/activity bars bars",
+            "/activity @Alice @Bobby",
+            "/activity rainbow",
+        ] {
+            assert!(parse_cmd(text).is_err(), "{text}");
+        }
     }
 
     #[test]
