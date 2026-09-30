@@ -17,10 +17,47 @@ use crate::{
 };
 
 use chrono_tz::Tz;
-use teloxide::{prelude::*, Bot};
+use std::time::Duration;
+use teloxide::{payloads::SendChatActionSetters, prelude::*, types::ChatAction, Bot};
 
 /// Handler for parsed incoming Telegram commands.
 pub async fn handle_cmd(
+    settings: Settings,
+    sc: StateContainer,
+    tz: Tz,
+    bot: Bot,
+    msg: Message,
+    cmd: Command,
+) -> Option<()> {
+    let chat_id = msg.chat.id;
+    let thread_id = msg.thread_id;
+    let typing = async {
+        let mut interval = tokio::time::interval(Duration::from_secs(4));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            // The first tick is immediate; subsequent ticks refresh Telegram's
+            // five-second typing status while the command is still running.
+            interval.tick().await;
+            let mut request = bot.send_chat_action(chat_id, ChatAction::Typing);
+            if let Some(thread_id) = thread_id {
+                request = request.message_thread_id(thread_id);
+            }
+            if let Err(error) = request.await {
+                log::warn!("Failed to send typing status for {chat_id}: {error}");
+            }
+        }
+    };
+
+    // Dropping the typing future on completion also covers early returns and
+    // cancellation, without leaving a background task running.
+    tokio::select! {
+        biased;
+        result = handle_cmd_inner(settings, sc, tz, bot.clone(), msg, cmd) => result,
+        _ = typing => unreachable!("typing refresh loop does not terminate"),
+    }
+}
+
+async fn handle_cmd_inner(
     settings: Settings,
     sc: StateContainer,
     tz: Tz,
