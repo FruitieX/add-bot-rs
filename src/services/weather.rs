@@ -1,5 +1,7 @@
+use crate::util::escape_html;
 use cached::proc_macro::cached;
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use color_eyre::{eyre::eyre, Result};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
 use serde::Deserialize;
@@ -259,20 +261,22 @@ fn fmt_wind(speed: Option<f32>, dir_deg: Option<f32>) -> String {
     }
 }
 
-/// Extract tomorrow's forecast data (24-48 hours from now)
-fn get_tomorrow_forecast(series: &[TimeSeries], now: DateTime<Utc>) -> Vec<&TimeSeries> {
-    let tomorrow_start = now + chrono::Duration::hours(24);
-    let tomorrow_end = now + chrono::Duration::hours(48);
-
+/// Forecast entries falling on tomorrow's calendar date in the chat timezone.
+fn get_tomorrow_forecast(series: &[TimeSeries], now: DateTime<Utc>, tz: Tz) -> Vec<&TimeSeries> {
+    let tomorrow = now.with_timezone(&tz).date_naive().succ_opt();
     series
         .iter()
-        .filter(|ts| ts.time >= tomorrow_start && ts.time < tomorrow_end)
+        .filter(|ts| Some(ts.time.with_timezone(&tz).date_naive()) == tomorrow)
         .collect()
 }
 
 /// Find tomorrow's maximum temperature and corresponding observation
-fn get_tomorrow_max_temp(series: &[TimeSeries], now: DateTime<Utc>) -> Option<(f32, &TimeSeries)> {
-    let tomorrow_entries = get_tomorrow_forecast(series, now);
+fn get_tomorrow_max_temp(
+    series: &[TimeSeries],
+    now: DateTime<Utc>,
+    tz: Tz,
+) -> Option<(f32, &TimeSeries)> {
+    let tomorrow_entries = get_tomorrow_forecast(series, now, tz);
 
     tomorrow_entries
         .into_iter()
@@ -376,7 +380,7 @@ pub async fn get_forecast() -> Result<Forecast> {
 
 /// Helper for "/temperature" command
 /// NOTE: This now maps symbol code to human-readable description.
-pub async fn format_temperature_line() -> Result<String> {
+pub async fn format_temperature_line(tz: Tz) -> Result<String> {
     let forecast = get_forecast().await?;
     let now = Utc::now();
 
@@ -395,7 +399,7 @@ pub async fn format_temperature_line() -> Result<String> {
     let (_, _, label) = get_weather_config()?;
 
     // Get tomorrow's max temperature
-    let tomorrow_info = get_tomorrow_max_temp(&forecast.properties.timeseries, now)
+    let tomorrow_info = get_tomorrow_max_temp(&forecast.properties.timeseries, now, tz)
         .map(|(temp, ts)| {
             let tomorrow_obs = extract_observation(ts);
             let tomorrow_desc = tomorrow_obs
@@ -409,106 +413,129 @@ pub async fn format_temperature_line() -> Result<String> {
         .unwrap_or_else(|| " Tomorrow: N/A.".to_string());
 
     Ok(format!(
-        "{label} now: {:.1}°C ({}).{}",
-        obs.air_temperature_c, symbol_desc, tomorrow_info
+        "{} now: {:.1}°C ({}).{}",
+        escape_html(&label),
+        obs.air_temperature_c,
+        escape_html(&symbol_desc),
+        escape_html(&tomorrow_info)
     ))
 }
 
-/// Helper for "/weather" command with a bit more detail
-pub async fn format_weather_report() -> Result<String> {
+/// Practical near-term weather for the configured location.
+pub async fn format_weather_report(tz: Tz) -> Result<String> {
     let forecast = get_forecast().await?;
-    let now = Utc::now();
+    let (_, _, label) = get_weather_config()?;
+    render_weather_report(&forecast, &label, Utc::now(), tz)
+}
 
-    let Some(ts) = pick_relevant_series(&forecast.properties.timeseries, now) else {
-        return Err(eyre!("No timeseries data available from met.no"));
-    };
-
+fn render_weather_report(
+    forecast: &Forecast,
+    label: &str,
+    now: DateTime<Utc>,
+    tz: Tz,
+) -> Result<String> {
+    let ts = pick_relevant_series(&forecast.properties.timeseries, now)
+        .ok_or_else(|| eyre!("No forecast data available"))?;
     let obs = extract_observation(ts);
-
     let gust = obs
         .wind_gust_ms
-        .map(|g| format!("{:.1} m/s", g))
-        .unwrap_or_else(|| "N/A".to_string());
-
+        .map(|g| format!("{g:.1} m/s"))
+        .unwrap_or_else(|| "N/A".into());
     let wind = fmt_wind(obs.wind_speed_ms, obs.wind_from_dir_deg);
-    let rh = obs
-        .rel_humidity_pc
-        .map(|h| format!("{:.0}%", h))
-        .unwrap_or_else(|| "N/A".to_string());
-    let clouds = obs
-        .cloud_cover_pc
-        .map(|c| format!("{:.0}%", c))
-        .unwrap_or_else(|| "N/A".to_string());
-    let pressure = obs
-        .pressure_hpa
-        .map(|p| format!("{:.0} hPa", p))
-        .unwrap_or_else(|| "N/A".to_string());
-
-    // Get temperature and weather info for next 1h and 6h
-    let (temp_1h, sym_1h) = {
-        let next_1h = now + chrono::Duration::hours(1);
-        forecast
+    let period_line = |hours: i64, symbol: &Option<String>, precipitation| {
+        let target = ts.time + chrono::Duration::hours(hours);
+        let temp = forecast
             .properties
             .timeseries
             .iter()
-            .filter(|ts| ts.time >= next_1h && ts.time < next_1h + chrono::Duration::hours(1))
-            .min_by_key(|ts| (ts.time - next_1h).num_seconds().abs())
-            .map(|ts| {
-                let obs = extract_observation(ts);
-                (
-                    ts.data.instant.details.air_temperature,
-                    fmt_symbol(&obs.next_1h_symbol.or(obs.next_6h_symbol)),
-                )
-            })
-            .unwrap_or((obs.air_temperature_c, fmt_symbol(&obs.next_1h_symbol)))
+            .find(|entry| entry.time == target)
+            .map(|entry| format!("{:.1}°C", entry.data.instant.details.air_temperature))
+            .unwrap_or_else(|| "N/A".into());
+        format!(
+            "Next {hours}h · {temp} · {} · Precip {}",
+            escape_html(&fmt_symbol(symbol)),
+            fmt_precip(precipitation)
+        )
     };
-    let precip_1h = fmt_precip(obs.next_1h_precip);
-
-    let (temp_6h, sym_6h) = {
-        let next_6h = now + chrono::Duration::hours(6);
-        forecast
-            .properties
-            .timeseries
-            .iter()
-            .filter(|ts| ts.time >= next_6h && ts.time < next_6h + chrono::Duration::hours(1))
-            .min_by_key(|ts| (ts.time - next_6h).num_seconds().abs())
-            .map(|ts| {
-                let obs = extract_observation(ts);
-                (
-                    ts.data.instant.details.air_temperature,
-                    fmt_symbol(&obs.next_6h_symbol.or(obs.next_1h_symbol)),
-                )
-            })
-            .unwrap_or((obs.air_temperature_c, fmt_symbol(&obs.next_6h_symbol)))
-    };
-    let precip_6h = fmt_precip(obs.next_6h_precip);
-
-    // Get tomorrow's max temperature
-    let tomorrow_info = get_tomorrow_max_temp(&forecast.properties.timeseries, now)
+    let tomorrow = get_tomorrow_max_temp(&forecast.properties.timeseries, now, tz)
         .map(|(temp, ts)| {
-            let tomorrow_obs = extract_observation(ts);
-            let tomorrow_desc = tomorrow_obs
-                .next_1h_symbol
-                .as_ref()
-                .or(tomorrow_obs.next_6h_symbol.as_ref())
-                .map(|code| symbol_description(code))
-                .unwrap_or_else(|| "unknown".to_string());
-            format!("Tomorrow max: {:.1}°C ({})", temp, tomorrow_desc)
+            let obs = extract_observation(ts);
+            format!(
+                "Tomorrow max · {temp:.1}°C · {}",
+                escape_html(&fmt_symbol(&obs.next_1h_symbol.or(obs.next_6h_symbol)))
+            )
         })
-        .unwrap_or_else(|| "Tomorrow: N/A".to_string());
-
-    let (_, _, label) = get_weather_config()?;
-
+        .unwrap_or_else(|| "Tomorrow max · N/A".into());
     Ok(format!(
-        "Weather for {label}\n\
-         - Now: {:.1}°C\n\
-         - Wind: {wind} (gusts: {gust})\n\
-         - Humidity: {rh}\n\
-         - Cloud cover: {clouds}\n\
-         - Pressure: {pressure}\n\
-         - Next 1h: {:.1}°C, {sym_1h}, precip: {precip_1h}\n\
-         - Next 6h: {:.1}°C, {sym_6h}, precip: {precip_6h}\n\
-         - {tomorrow_info}",
-        obs.air_temperature_c, temp_1h, temp_6h
+        "🌦️ {} · {:.1}°C\nWind {wind} · Gusts {gust}\n\n{}\n{}\n{tomorrow}",
+        escape_html(label),
+        obs.air_temperature_c,
+        period_line(1, &obs.next_1h_symbol, obs.next_1h_precip),
+        period_line(6, &obs.next_6h_symbol, obs.next_6h_precip)
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+
+    fn sample(time: DateTime<Utc>, temp: f32) -> TimeSeries {
+        serde_json::from_value(serde_json::json!({
+            "time": time,
+            "data": {
+                "instant": {"details": {"air_temperature": temp, "wind_speed": 4.2, "wind_speed_of_gust": 7.1, "wind_from_direction": 225.0}},
+                "next_1_hours": {"summary": {"symbol_code": "cloudy"}, "details": {"precipitation_amount": 0.0}},
+                "next_6_hours": {"summary": {"symbol_code": "rain"}, "details": {"precipitation_amount": 1.2}}
+            }
+        })).unwrap()
+    }
+
+    #[test]
+    fn tomorrow_is_a_local_calendar_day_including_daylight_saving() {
+        let tz = chrono_tz::Europe::Helsinki;
+        let now = tz
+            .with_ymd_and_hms(2026, 10, 24, 23, 30, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        let start = tz
+            .with_ymd_and_hms(2026, 10, 25, 0, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        let entries = (-1..=25)
+            .map(|hour| sample(start + Duration::hours(hour), hour as f32))
+            .collect::<Vec<_>>();
+        let tomorrow = get_tomorrow_forecast(&entries, now, tz);
+        assert_eq!(tomorrow.len(), 25);
+        assert_eq!(tomorrow.first().unwrap().time, start);
+        assert_eq!(tomorrow.last().unwrap().time, start + Duration::hours(24));
+        assert_eq!(get_tomorrow_max_temp(&entries, now, tz).unwrap().0, 24.0);
+    }
+
+    #[test]
+    fn practical_weather_keeps_period_conditions_aligned_and_missing_values_explicit() {
+        let tz = chrono_tz::Europe::Helsinki;
+        let now = Utc.with_ymd_and_hms(2026, 9, 30, 10, 0, 0).unwrap();
+        let mut next = sample(now + Duration::hours(1), 12.1);
+        next.data
+            .next_1_hours
+            .as_mut()
+            .unwrap()
+            .summary
+            .as_mut()
+            .unwrap()
+            .symbol_code = "heavysnow".into();
+        let forecast = Forecast {
+            properties: Properties {
+                timeseries: vec![sample(now, 12.4), next],
+            },
+        };
+        let text = render_weather_report(&forecast, "A&B", now, tz).unwrap();
+        assert!(text.starts_with("🌦️ A&amp;B · 12.4°C\nWind 4.2 m/s SW · Gusts 7.1 m/s"));
+        assert!(text.contains("Next 1h · 12.1°C · cloudy · Precip 0.0 mm"));
+        assert!(text.contains("Next 6h · N/A · rain · Precip 1.2 mm"));
+        assert!(text.ends_with("Tomorrow max · N/A"));
+        assert!(!text.contains("Humidity"));
+        assert!(!text.contains("Pressure"));
+    }
 }

@@ -1,15 +1,17 @@
-use super::chart_text::ChartBackend;
+use super::{
+    chart_style::{self, BORDER, INK, MUTED, WIDTH},
+    chart_text::ChartBackend,
+};
 use std::collections::{HashMap, HashSet};
 
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
-    prelude::{BitMapBackend, IntoDrawingArea, LineSeries, PathElement, Rectangle, Text},
+    prelude::{BitMapBackend, IntoDrawingArea, PathElement, Rectangle, Text},
     style::{
-        self, register_font,
         text_anchor::{HPos, Pos, VPos},
-        Color, IntoFont, RGBColor, TextStyle, BLACK, WHITE,
+        Color, IntoFont, RGBColor, TextStyle, WHITE,
     },
 };
 
@@ -75,7 +77,6 @@ fn render_activity_chart(
     all_games: Vec<LeetifyGame>,
     filter_user: Option<&Username>,
 ) -> Result<Vec<u8>> {
-    const SHOW_PLAYER_LINES: bool = false;
     if all_games.is_empty() {
         return Err(eyre!("No games found for any configured player"));
     }
@@ -206,28 +207,95 @@ fn render_activity_chart(
         }
     }
 
-    let mut max_count = counts.values().copied().max().unwrap_or(1);
-    if SHOW_PLAYER_LINES {
-        for (_, m) in per_player_daily.iter() {
-            if let Some(mc) = m.values().copied().max() {
-                if mc > max_count {
-                    max_count = mc;
+    let max_count = counts.values().copied().max().unwrap_or(1).max(5);
+
+    // Participant colors retain the existing activity aggregation semantics.
+    // Calculate teammate frequency for filtered user or global player totals
+    // Build a map of username -> set of unique game keys (within timeframe) so we can compute
+    // intersections per game (avoids double-counting and matches per-player unique-game counts)
+    let mut player_keys_map: HashMap<String, HashSet<String>> = HashMap::new();
+    for (username, games) in per_player_games.iter() {
+        let mut keys: HashSet<String> = HashSet::new();
+        for g in games.iter() {
+            let d = g.game_finished_at.date_naive();
+            if d < start || d > today {
+                continue;
+            }
+            let key = game_key(g);
+            keys.insert(key);
+        }
+        player_keys_map.insert(username.clone(), keys);
+    }
+
+    // top_players_with_counts: Vec<(username, count)>
+    let top_players_with_counts: Vec<(String, u32)> = if let Some(filtered_user) = filter_user {
+        // When filtering, compute counts per GAME (not per day). Show teammates ordered by how
+        // often they played in the same game as the filtered user. Include the filtered user
+        // themself first with their total number of unique games in timeframe.
+        let filtered_username = filtered_user.to_string();
+
+        let filtered_set = player_keys_map
+            .get(&filtered_username)
+            .cloned()
+            .unwrap_or_default();
+        let filtered_games_count = filtered_set.len() as u32;
+
+        // For each other player, compute intersection size with filtered_set
+        let mut teammate_totals: Vec<(String, u32)> = Vec::new();
+        for (other_username, other_set) in player_keys_map.iter() {
+            if other_username == &filtered_username {
+                continue;
+            }
+            let mut inter: u32 = 0;
+            for k in filtered_set.iter() {
+                if other_set.contains(k) {
+                    inter += 1;
                 }
             }
+            if inter > 0 {
+                teammate_totals.push((other_username.clone(), inter));
+            }
         }
-    }
-    max_count = max_count.max(5); // ensure some space
+        teammate_totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    // Prepare chart
-    let width: usize = 1024;
-    let height: usize = 720;
-    register_font(
-        "sans-serif",
-        plotters::style::FontStyle::Normal,
-        include_bytes!("../../assets/Roboto-Regular.ttf"),
-    )
-    .map_err(|_| eyre!("Failed to register font"))?;
+        // Build vector including filtered user first
+        let mut v: Vec<(String, u32)> = Vec::new();
+        v.push((filtered_username.clone(), filtered_games_count));
+        for (name, cnt) in teammate_totals.into_iter().take(9) {
+            v.push((name, cnt));
+        }
+        v
+    } else {
+        // Original logic for global view - top players by total games
+        let mut player_totals: Vec<(String, u32)> = per_player_daily
+            .iter()
+            .map(|(username, daily_counts)| {
+                let total = daily_counts.values().sum::<u32>();
+                (username.clone(), total)
+            })
+            .collect();
 
+        player_totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        player_totals.into_iter().take(10).collect()
+    };
+
+    // Build a helper vector of top names for quick lookup and mapping index -> name
+    let top_names: Vec<String> = top_players_with_counts
+        .iter()
+        .map(|(n, _)| n.clone())
+        .collect();
+
+    let palette = colorous::TABLEAU10;
+    let others_color = RGBColor(128, 128, 128);
+
+    let has_others = daily_participants
+        .values()
+        .any(|players| players.iter().any(|name| !top_names.contains(name)));
+    let legend_entries = top_players_with_counts.len() + usize::from(has_others);
+    let legend_rows = legend_entries.div_ceil(2);
+    let width = WIDTH as usize;
+    let height = 1040 + legend_rows * 44;
     let mut buffer = vec![0; width * height * 3];
     {
         let root = ChartBackend(BitMapBackend::with_buffer(
@@ -235,163 +303,80 @@ fn render_activity_chart(
             (width as u32, height as u32),
         ))
         .into_drawing_area();
-        root.fill(&WHITE)?;
-
-        let caption = if let Some(u) = filter_user {
-            format!("Games played per day with {u} (last {span_days} days)")
-        } else {
-            format!("Games played per day (last {span_days} days)")
-        };
-        let mut ctx = ChartBuilder::on(&root)
-            .set_label_area_size(LabelAreaPosition::Left, 70)
-            .set_label_area_size(LabelAreaPosition::Bottom, 70)
-            .caption(caption, ("sans-serif", 40))
-            .margin(20)
+        chart_style::frame(&root)?;
+        chart_style::text(&root, "Match activity", (100, 86), 46, INK, true)?;
+        let scope = filter_user
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "Configured players".into());
+        chart_style::text(
+            &root,
+            &chart_style::fit_text(
+                &format!(
+                    "{scope}  ·  {} – {}  ·  UTC dates",
+                    start.format("%-d %b %Y"),
+                    today.format("%-d %b %Y")
+                ),
+                22,
+                1300,
+            ),
+            (100, 150),
+            22,
+            MUTED,
+            false,
+        )?;
+        let total = counts.values().sum::<u32>();
+        let active_days = counts.values().filter(|count| **count > 0).count();
+        let busiest = counts.values().copied().max().unwrap_or(0);
+        for (x, value, label) in [
+            (100, total.to_string(), "RECORDED MATCHES"),
+            (590, active_days.to_string(), "ACTIVE DAYS"),
+            (1080, busiest.to_string(), "BUSIEST DAY · MATCHES"),
+        ] {
+            chart_style::text(&root, &value, (x, 210), 46, INK, true)?;
+            chart_style::text(&root, label, (x, 270), 20, MUTED, true)?;
+        }
+        let plot = root.clone().shrink((80, 330), (1340, 480));
+        let mut ctx = ChartBuilder::on(&plot)
+            .set_label_area_size(LabelAreaPosition::Left, 48)
+            .set_label_area_size(LabelAreaPosition::Bottom, 0)
+            .margin_right(10)
+            .margin_top(10)
             .build_cartesian_2d(
                 start..today.succ_opt().unwrap_or(today),
                 0f32..(max_count as f32 + 1.0),
             )?;
-
-        let x_label_style = style::TextStyle::from(("sans-serif", 25).into_font());
-        let y_label_style = style::TextStyle::from(("sans-serif", 30).into_font());
-
-        // Generate month start dates for x-axis ticks
-        let mut month_ticks = Vec::new();
-        let mut tmp = NaiveDate::from_ymd_opt(start.year(), start.month(), 1).unwrap_or(start);
-        while tmp <= today {
-            month_ticks.push(tmp);
-            let (y, m) = (tmp.year(), tmp.month());
-            let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
-            if let Some(next) = NaiveDate::from_ymd_opt(ny, nm, 1) {
-                tmp = next;
-            } else {
-                break;
-            }
-        }
-
         ctx.configure_mesh()
-            .x_label_style(x_label_style)
-            .y_label_style(y_label_style)
-            .x_desc("Date")
-            .y_desc("Games")
-            .y_labels(10)
             .x_labels(0)
-            .x_label_formatter(&|_| String::from(""))
-            .y_label_formatter(&|v| format!("{}", v))
-            .disable_mesh()
+            .y_labels(6)
+            .disable_x_mesh()
+            .axis_style(WHITE)
+            .bold_line_style(BORDER)
+            .light_line_style(WHITE)
+            .y_label_style(("sans-serif", 22).into_font().color(&MUTED))
+            .y_label_formatter(&|v| {
+                if v.fract().abs() < 0.01 {
+                    format!("{v:.0}")
+                } else {
+                    String::new()
+                }
+            })
+            .set_all_tick_mark_size(0)
             .draw()?;
-
-        // Draw custom x-axis ticks at month boundaries
-        for &tick_date in &month_ticks {
-            if tick_date >= start && tick_date <= today {
-                ctx.draw_series(std::iter::once(PathElement::new(
-                    vec![(tick_date, 0f32), (tick_date, max_count as f32 + 1.0)],
-                    RGBColor(200, 200, 200).stroke_width(1),
-                )))?;
+        // Date labels use the chart's actual coordinate transform.
+        for offset in [0, 15, 30, 45, 60, 75, 90] {
+            let date = start + Duration::days(offset);
+            if date > today {
+                continue;
             }
+            let point = ctx.backend_coord(&(date, 0.0));
+            root.draw(&Text::new(
+                date.format("%-d %b").to_string(),
+                (point.0, 835),
+                TextStyle::from(("sans-serif", 22))
+                    .color(&MUTED)
+                    .pos(Pos::new(HPos::Center, VPos::Top)),
+            ))?;
         }
-
-        // Draw month labels using backend coordinates
-        for &tick_date in &month_ticks {
-            if tick_date >= start && tick_date <= today {
-                // Calculate pixel position for the tick date
-                let days_from_start = (tick_date - start).num_days() as f64;
-                let total_days = ((today - start).num_days() + 1) as f64;
-                let x_ratio = days_from_start / total_days;
-
-                // Chart area bounds (approximate, accounting for margins and label areas)
-                let chart_left = 90i32; // Left margin + y-label area
-                let chart_right = (width as i32) - 20; // Right margin
-                let chart_bottom = (height as i32) - 75; // Position for labels
-
-                let x_pixel = chart_left + ((chart_right - chart_left) as f64 * x_ratio) as i32;
-
-                root.draw(&Text::new(
-                    tick_date.format("%Y-%m").to_string(),
-                    (x_pixel, chart_bottom),
-                    TextStyle::from(("sans-serif", 25)).pos(Pos::new(HPos::Center, VPos::Top)),
-                ))?;
-            }
-        }
-
-        // Calculate teammate frequency for filtered user or global player totals
-        // Build a map of username -> set of unique game keys (within timeframe) so we can compute
-        // intersections per game (avoids double-counting and matches per-player unique-game counts)
-        let mut player_keys_map: HashMap<String, HashSet<String>> = HashMap::new();
-        for (username, games) in per_player_games.iter() {
-            let mut keys: HashSet<String> = HashSet::new();
-            for g in games.iter() {
-                let d = g.game_finished_at.date_naive();
-                if d < start || d > today {
-                    continue;
-                }
-                let key = game_key(g);
-                keys.insert(key);
-            }
-            player_keys_map.insert(username.clone(), keys);
-        }
-
-        // top_players_with_counts: Vec<(username, count)>
-        let top_players_with_counts: Vec<(String, u32)> = if let Some(filtered_user) = filter_user {
-            // When filtering, compute counts per GAME (not per day). Show teammates ordered by how
-            // often they played in the same game as the filtered user. Include the filtered user
-            // themself first with their total number of unique games in timeframe.
-            let filtered_username = filtered_user.to_string();
-
-            let filtered_set = player_keys_map
-                .get(&filtered_username)
-                .cloned()
-                .unwrap_or_default();
-            let filtered_games_count = filtered_set.len() as u32;
-
-            // For each other player, compute intersection size with filtered_set
-            let mut teammate_totals: Vec<(String, u32)> = Vec::new();
-            for (other_username, other_set) in player_keys_map.iter() {
-                if other_username == &filtered_username {
-                    continue;
-                }
-                let mut inter: u32 = 0;
-                for k in filtered_set.iter() {
-                    if other_set.contains(k) {
-                        inter += 1;
-                    }
-                }
-                if inter > 0 {
-                    teammate_totals.push((other_username.clone(), inter));
-                }
-            }
-            teammate_totals.sort_by_key(|a| std::cmp::Reverse(a.1));
-
-            // Build vector including filtered user first
-            let mut v: Vec<(String, u32)> = Vec::new();
-            v.push((filtered_username.clone(), filtered_games_count));
-            for (name, cnt) in teammate_totals.into_iter().take(9) {
-                v.push((name, cnt));
-            }
-            v
-        } else {
-            // Original logic for global view - top players by total games
-            let mut player_totals: Vec<(String, u32)> = per_player_daily
-                .iter()
-                .map(|(username, daily_counts)| {
-                    let total = daily_counts.values().sum::<u32>();
-                    (username.clone(), total)
-                })
-                .collect();
-
-            player_totals.sort_by_key(|a| std::cmp::Reverse(a.1));
-
-            player_totals.into_iter().take(10).collect()
-        };
-
-        // Build a helper vector of top names for quick lookup and mapping index -> name
-        let top_names: Vec<String> = top_players_with_counts
-            .iter()
-            .map(|(n, _)| n.clone())
-            .collect();
-
-        let palette = colorous::TABLEAU10;
-        let others_color = RGBColor(128, 128, 128);
 
         // Draw segmented bars
         for d in dates.iter() {
@@ -470,93 +455,58 @@ fn render_activity_chart(
             }
         }
 
-        // Draw legend for top players + others (with counts)
-        if !top_players_with_counts.is_empty() {
-            // Add top players to legend (show count in label)
-            for (idx, (player_name, cnt)) in top_players_with_counts.iter().enumerate() {
-                let color = palette[idx % palette.len()];
-                let rgb = RGBColor(color.r, color.g, color.b);
-                let label_text = format!("{} ({})", player_name, cnt);
-
-                // Draw an invisible series to register legend entry with label_text
-                ctx.draw_series(std::iter::once(Rectangle::new(
-                    [(start, 0.), (start, 0.)],
-                    rgb,
-                )))?
-                .label(label_text.clone())
-                .legend(move |(x, y)| Rectangle::new([(x, y - 15), (x + 15, y + 5)], rgb.filled()));
-            }
-
-            // Add others if there are more players/teammates than can be shown
-            let has_others = if filter_user.is_some() {
-                // For filtered view, check if total unique participants (excluding filtered user) > shown teammates
-                let total_teammates: HashSet<String> = daily_participants
-                    .values()
-                    .flat_map(|participants| {
-                        participants
-                            .iter()
-                            .filter(|p| **p != filter_user.unwrap().to_string())
-                            .cloned()
-                            .collect::<Vec<String>>()
-                    })
-                    .collect();
-                // We showed up to 9 teammates + 1 filtered user = up to 10 entries
-                total_teammates.len() + 1 > top_players_with_counts.len()
+        root.draw(&PathElement::new(vec![(100, 885), (1400, 885)], BORDER))?;
+        chart_style::text(
+            &root,
+            if filter_user.is_some() {
+                "PLAYERS IN SHARED MATCHES · RECORDED COUNTS"
             } else {
-                // For global view, check if there are more than top count players
-                // compute total unique players participating in timeframe
-                let total_players: HashSet<String> = daily_participants
-                    .values()
-                    .flat_map(|participants| participants.iter().cloned().collect::<Vec<String>>())
-                    .collect();
-                total_players.len() > top_players_with_counts.len()
-            };
-
-            if has_others {
-                ctx.draw_series(std::iter::once(Rectangle::new(
-                    [(start, 0.), (start, 0.)],
-                    others_color,
-                )))?
-                .label("Others".to_string())
-                .legend(move |(x, y)| {
-                    Rectangle::new([(x, y - 15), (x + 15, y + 5)], others_color.filled())
-                });
-            }
-
-            ctx.configure_series_labels()
-                .border_style(BLACK)
-                .background_style(WHITE.mix(0.8))
-                .position(plotters::chart::SeriesLabelPosition::UpperLeft)
-                .label_font(("sans-serif", 20))
-                .draw()?;
+                "PLAYERS · RECORDED MATCH COUNTS"
+            },
+            (100, 910),
+            23,
+            INK,
+            true,
+        )?;
+        let mut entries = top_players_with_counts
+            .iter()
+            .enumerate()
+            .map(|(index, (name, count))| {
+                let color = palette[index % palette.len()];
+                (
+                    format!("{} · {count}", chart_style::fit_text(name, 22, 440)),
+                    RGBColor(color.r, color.g, color.b),
+                )
+            })
+            .collect::<Vec<_>>();
+        if has_others {
+            entries.push(("Others".into(), others_color));
         }
-
-        // Draw per-player line series (distinct color per player)
-        if SHOW_PLAYER_LINES {
-            let palette = colorous::TABLEAU10; // [Color; 10]
-            for (idx, (username, daily)) in per_player_daily.iter().enumerate() {
-                // Build ordered series (convert to i32)
-                let series_pts = dates
-                    .iter()
-                    .map(|d| (*d, *daily.get(d).unwrap_or(&0u32) as f32))
-                    .collect::<Vec<_>>();
-                let color = palette[idx % palette.len()];
-                let rgb = RGBColor(color.r, color.g, color.b);
-                ctx.draw_series(LineSeries::new(series_pts, rgb))?
-                    .label(username.clone())
-                    .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], rgb));
-            }
-            if !per_player_daily.is_empty() {
-                ctx.configure_series_labels()
-                    .border_style(BLACK)
-                    .background_style(WHITE.mix(0.8))
-                    .position(plotters::chart::SeriesLabelPosition::UpperLeft)
-                    .label_font(("sans-serif", 20))
-                    .draw()?;
-            }
+        for (index, (label, color)) in entries.iter().enumerate() {
+            let x = 100 + (index % 2) as i32 * 660;
+            let y = 958 + (index / 2) as i32 * 44;
+            root.draw(&Rectangle::new(
+                [(x, y + 3), (x + 18, y + 21)],
+                color.filled(),
+            ))?;
+            chart_style::text(
+                &root,
+                &chart_style::fit_text(label, 22, 580),
+                (x + 32, y),
+                22,
+                INK,
+                false,
+            )?;
         }
+        chart_style::text(
+            &root,
+            "Colors mark participants; segment sizes are not player match totals.",
+            (100, height as i32 - 65),
+            18,
+            MUTED,
+            false,
+        )?;
 
-        // (Using native ticks/labels now; manual month labels removed.)
         root.present()?;
     }
 
@@ -602,7 +552,14 @@ mod tests {
         let chart = render_activity_chart(players.clone(), all_games, None).unwrap();
         std::fs::write("target/activity-preview.png", chart).unwrap();
         let chart =
-            render_activity_chart(players, games, Some(&Username::new("Alice".into()))).unwrap();
+            render_activity_chart(players, games.clone(), Some(&Username::new("Alice".into())))
+                .unwrap();
         std::fs::write("target/activity-player-preview.png", chart).unwrap();
+        let players = (0..12).map(|index| (format!("Player {index:02} with an exceptionally long display name for layout review"),games.clone())).collect();
+        std::fs::write(
+            "target/activity-long-names-preview.png",
+            render_activity_chart(players, games, None).unwrap(),
+        )
+        .unwrap();
     }
 }

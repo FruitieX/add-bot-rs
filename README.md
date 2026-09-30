@@ -24,6 +24,10 @@ make teammate records unavailable rather than silently undercounting games.
 
 All raster charts share the corrected glyph layout used by `/results`, including
 activity/electricity captions, axes, legends, and annotations.
+They also share a light background, rounded white card, typography, and muted
+labels. Activity adds match/active-day/busiest-day summaries and moves player
+legends below the plot. Its existing participant segments remain equal shares
+of each day's total; the legend shows recorded counts separately.
 
 Rank and metric leaderboards use compact name-first rows and group summaries
 covering all successfully fetched players. Premier ratings use thousands
@@ -114,8 +118,12 @@ area. No matches, short histories, and tie-only histories have explicit messages
 
 ## Electricity forecast
 
-`/el` always sends the existing Porssisahko price chart. When the chat has
-active CS2 queues, it also sends an electricity-cost forecast for each queue.
+`/el` sends one Porssisahko price image with current/low/high prices, quieter
+grid lines, and a current-time marker. When the chat has active CS2 queues,
+their electricity-cost estimates appear in a panel beneath the plot, labelled
+per PC per estimated match. No separate forecast message is sent. The panel
+shows the PC load, estimated duration and sample, included variable charges,
+and unavailable estimates. Its height grows with the number of queues.
 
 - An instant queue is priced as if the match starts now, because its actual
   fill time is unknown.
@@ -154,3 +162,12 @@ Sources:
 
 - [Porssisahko](https://porssisahko.net/)
 - [Caruna Espoo network service tariff 1 January 2026](https://caruna.fi/tuotteet-ja-palvelut/kotiin-ja-kiinteistoon/verkkopalveluhinnastot/verkkopalveluhinnasto-caruna-0)
+
+## Weather output
+
+`/weather` shows temperature, wind/gusts, the next 1/6-hour conditions and
+precipitation, and tomorrow's forecast high. Humidity, cloud cover, and pressure
+are omitted from the compact report. Conditions and precipitation come from
+the same forecast period; unavailable future temperatures are shown as `N/A`.
+Both `/weather` and `/temperature` calculate tomorrow using the chat's local
+calendar date, including daylight-saving changes.

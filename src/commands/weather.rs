@@ -1,4 +1,5 @@
 use crate::services::weather::{format_temperature_line, format_weather_report};
+use chrono_tz::Tz;
 
 /// Build a user-friendly error message for weather commands.
 /// If weather is not configured, we tell the user how to enable it.
@@ -20,8 +21,8 @@ fn friendly_weather_error_message(error: &str, fallback: &str) -> String {
 
 /// Returns a short temperature line for the configured location.
 /// Example: "Location Name now: 7.3°C (cloudy)."
-pub async fn temperature() -> String {
-    match format_temperature_line().await {
+pub async fn temperature(tz: Tz) -> String {
+    match format_temperature_line(tz).await {
         Ok(text) => text,
         Err(e) => {
             eprintln!("Failed to fetch temperature from met.no: {e:?}");
@@ -31,9 +32,9 @@ pub async fn temperature() -> String {
 }
 
 /// Returns a more detailed weather report for the configured location.
-/// Includes temperature, wind, humidity, clouds, pressure, and short-term precipitation.
-pub async fn weather() -> String {
-    match format_weather_report().await {
+/// Includes temperature, wind/gusts, near-term conditions and precipitation, and tomorrow’s high.
+pub async fn weather(tz: Tz) -> String {
+    match format_weather_report(tz).await {
         Ok(text) => text,
         Err(e) => {
             eprintln!("Failed to fetch weather from met.no: {e:?}");

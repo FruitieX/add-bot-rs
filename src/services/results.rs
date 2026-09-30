@@ -5,14 +5,13 @@ use color_eyre::{eyre::eyre, Result};
 use plotters::{
     coord::Shift,
     element::DashedPathElement,
-    prelude::{
-        BitMapBackend, Circle, DrawingArea, IntoDrawingArea, PathElement, Polygon, Rectangle,
-    },
-    style::{text_anchor::HPos, Color, RGBColor, WHITE},
+    prelude::{BitMapBackend, DrawingArea, IntoDrawingArea, PathElement, Polygon, Rectangle},
+    style::{text_anchor::HPos, Color, RGBColor},
 };
 
 use crate::{
     services::{
+        chart_style::{BORDER, INK, MUTED, WIDTH},
         chart_text::layout_text,
         leetify::{get_leetify_games, LeetifyGame},
     },
@@ -22,7 +21,6 @@ use crate::{
 
 const DAYS_SHOWN: usize = 90;
 const FORM_WINDOW: usize = 20;
-const WIDTH: u32 = 1500;
 const LEFT: i32 = 128;
 const RIGHT: i32 = 1370;
 const TOP: i32 = 370;
@@ -32,9 +30,6 @@ const TILE_STEP: i32 = 17;
 const WIN: RGBColor = RGBColor(52, 199, 89);
 const LOSS: RGBColor = RGBColor(255, 59, 48);
 const TIE: RGBColor = RGBColor(255, 214, 10);
-const INK: RGBColor = RGBColor(25, 43, 54);
-const MUTED: RGBColor = RGBColor(101, 118, 129);
-const BORDER: RGBColor = RGBColor(229, 234, 240);
 const COLORS: [RGBColor; 3] = [WIN, LOSS, TIE];
 
 fn game_key(game: &LeetifyGame) -> String {
@@ -219,16 +214,7 @@ fn render_results(data: &ResultsData, filter_user: Option<&Username>) -> Result<
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)).into_drawing_area();
-        root.fill(&RGBColor(243, 246, 249))?;
-        let bottom = height as i32 - 32;
-        root.draw(&Rectangle::new([(54, 30), (1446, bottom)], WHITE.filled()))?;
-        root.draw(&Rectangle::new(
-            [(30, 54), (1470, bottom - 24)],
-            WHITE.filled(),
-        ))?;
-        for center in [(54, 54), (1446, 54), (54, bottom - 24), (1446, bottom - 24)] {
-            root.draw(&Circle::new(center, 24, WHITE.filled()))?;
-        }
+        super::chart_style::frame(&root)?;
         text(&root, "Wins, losses & ties", (100, 86), 46, INK, HPos::Left)?;
         let user = filter_user
             .map(ToString::to_string)

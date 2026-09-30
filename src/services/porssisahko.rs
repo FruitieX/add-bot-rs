@@ -1,29 +1,19 @@
-use super::chart_text::ChartBackend;
+use super::{
+    chart_style::{self, ChartPanel, ACCENT, BORDER, INK, MUTED, WIDTH},
+    chart_text::ChartBackend,
+};
 use cached::proc_macro::cached;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use chrono_tz::Tz;
 use color_eyre::{eyre::eyre, Result};
 use plotters::{
     chart::{ChartBuilder, LabelAreaPosition},
-    prelude::{BitMapBackend, IntoDrawingArea, LineSeries, Rectangle, Text},
-    style::{
-        self, register_font,
-        text_anchor::{HPos, Pos, VPos},
-        Color, FontStyle, IntoFont, RGBColor, ShapeStyle, BLACK, RED, WHITE,
-    },
+    prelude::*,
+    style::text_anchor::{HPos, Pos, VPos},
 };
 use serde::Deserialize;
-use std::cmp::{max, min};
 
 const TZ: Tz = chrono_tz::Europe::Helsinki;
-
-fn fmt_x_axis(x: &DateTime<Tz>) -> String {
-    x.format("%_H:00").to_string()
-}
-
-fn fmt_y_axis(y: &f32) -> String {
-    format!("{y:.0}")
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EnergyCostEstimate {
@@ -94,280 +84,208 @@ pub fn estimate_energy_cost(
 }
 #[cached(ttl_secs = 1)]
 pub async fn get_price_chart() -> Result<Vec<u8>> {
-    // Get prices
-    let prices = get_latest_prices().await?;
+    render_price_chart(&get_latest_prices().await?, Utc::now(), TZ, None)
+}
 
-    // We remove 3 hours * 4 15-minute prices to align the chart more nicely.
-    let prices: Vec<HourlyPrice> = prices.into_iter().skip(12).collect();
-
-    let max_price = prices
+pub(crate) fn render_price_chart(
+    prices: &[HourlyPrice],
+    now: DateTime<Utc>,
+    tz: Tz,
+    panel: Option<&ChartPanel>,
+) -> Result<Vec<u8>> {
+    // Preserve the existing three-hour trim, including all remaining 15-minute slots.
+    let prices = &prices[if prices.len() > 12 { 12 } else { 0 }..];
+    let first = prices.first().ok_or_else(|| eyre!("No prices found"))?;
+    let last = prices.last().unwrap();
+    let start = first.start_date.with_timezone(&tz);
+    let end = (last.start_date + Duration::minutes(15)).with_timezone(&tz);
+    let current = prices
         .iter()
-        .fold(f32::NEG_INFINITY, |a, &b| a.max(b.price))
-        .max(15.)
-        + 5.0;
-    let mut min_price = prices.iter().fold(0.0f32, |a, &b| a.min(b.price));
-
-    // Move the min price a bit lower for better visual spacing
-    // in case we have negative prices
-    if min_price < 0.0 {
-        min_price -= 5.0;
-    } else {
-        min_price = 0.0;
-    }
-
-    // Generate a chart
-    let width: usize = 1024;
-    let height: usize = 768;
-
-    register_font(
-        "sans-serif",
-        FontStyle::Normal,
-        include_bytes!("../../assets/Roboto-Regular.ttf"),
-    )
-    .map_err(|_| eyre!("Failed to register font"))?;
-
-    let (
-        Some(HourlyPrice { start_date, .. }),
-        Some(HourlyPrice {
-            start_date: end_date,
-            ..
-        }),
-    ) = (prices.first(), prices.last())
-    else {
-        return Err(eyre!("No prices found"));
-    };
-
-    let start_date = start_date.with_timezone(&TZ);
-    let end_date = end_date.with_timezone(&TZ);
-    let current_date = Utc::now().with_timezone(&TZ);
-
-    let mut buffer = vec![0; width * height * 3];
-    // let mut buffer = String::new();
+        .find(|p| p.start_date <= now && now < p.start_date + Duration::minutes(15));
+    let low = prices.iter().map(|p| p.price).fold(f32::INFINITY, f32::min);
+    let high = prices
+        .iter()
+        .map(|p| p.price)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let padding = ((high - low) * 0.12).max(2.0);
+    let minimum = if low < 0.0 { low - padding } else { 0.0 };
+    let maximum = high.max(5.0) + padding;
+    let height = 930 + panel.map_or(0, ChartPanel::height);
+    let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
-        let root = ChartBackend(BitMapBackend::with_buffer(
-            &mut buffer,
-            (width as u32, height as u32),
-        ))
-        .into_drawing_area();
-        // let root =
-        //     SVGBackend::with_string(&mut buffer, (width as u32, height as u32)).into_drawing_area();
-        root.fill(&WHITE)?;
-
-        let mut ctx = ChartBuilder::on(&root)
-            .set_label_area_size(LabelAreaPosition::Left, 80)
-            .set_label_area_size(LabelAreaPosition::Bottom, 80)
-            .caption(
-                format!(
-                    "Elpris {from}—{to}",
-                    from = start_date.format("%d.%m.%Y"),
-                    to = end_date.format("%d.%m.%Y"),
-                ),
-                ("sans-serif", 35),
-            )
-            .margin(20)
-            .build_cartesian_2d(start_date..end_date, min_price..max_price)?;
-
-        let y_label_style = style::TextStyle::from(("sans-serif", 28).into_font())
-            .pos(Pos::new(HPos::Right, VPos::Bottom));
-        let x_label_style = style::TextStyle::from(("sans-serif", 26).into_font());
-        let x_label_style_date = style::TextStyle::from(("sans-serif", 26).into_font())
-            .pos(Pos::new(HPos::Center, VPos::Top));
-
-        // make a single ShapeStyle representing the gray mesh style (use same stroke width)
-        let axis_mesh_style = ShapeStyle::from(&RGBColor(150, 150, 150)).stroke_width(1);
-
-        // determine an x-label count so labels are at most every 4 hours
-        let total_hours = (end_date - start_date).num_seconds() / 3600;
-        let mut x_label_count = (total_hours / 4) as usize + 1; // floor(total_hours/4) + 1
-        if x_label_count == 0 {
-            x_label_count = 1;
+        let root = ChartBackend(BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)))
+            .into_drawing_area();
+        chart_style::frame(&root)?;
+        chart_style::text(&root, "Electricity prices", (100, 86), 46, INK, true)?;
+        chart_style::text(
+            &root,
+            &format!(
+                "{} – {}  ·  {} time  ·  15-minute prices",
+                start.format("%-d %b %Y"),
+                end.format("%-d %b %Y"),
+                tz
+            ),
+            (100, 150),
+            22,
+            MUTED,
+            false,
+        )?;
+        for (x, value, label) in [
+            (
+                100,
+                current
+                    .map(|p| format!("{:.2}", p.price))
+                    .unwrap_or_else(|| "—".into()),
+                "NOW · c/kWh",
+            ),
+            (590, format!("{low:.2}"), "PERIOD LOW · c/kWh"),
+            (1080, format!("{high:.2}"), "PERIOD HIGH · c/kWh"),
+        ] {
+            chart_style::text(&root, &value, (x, 210), 46, INK, true)?;
+            chart_style::text(&root, label, (x, 270), 20, MUTED, true)?;
         }
-        // clamp to a reasonable maximum to avoid too many labels
-        x_label_count = x_label_count.min(16);
-
+        let plot = root.clone().shrink((80, 330), (1340, 480));
+        let mut ctx = ChartBuilder::on(&plot)
+            .set_label_area_size(LabelAreaPosition::Left, 48)
+            .set_label_area_size(LabelAreaPosition::Bottom, 0)
+            .margin_right(10)
+            .margin_top(10)
+            .build_cartesian_2d(start..end, minimum..maximum)?;
         ctx.configure_mesh()
-            .set_all_tick_mark_size(10.)
-            .x_labels(x_label_count)
-            .y_labels(12)
-            .x_label_style(x_label_style)
-            .y_label_style(y_label_style)
-            .x_label_formatter(&fmt_x_axis)
-            .y_label_formatter(&fmt_y_axis)
-            .y_desc("Price (c/kWh)")
-            .x_max_light_lines(4)
-            .y_max_light_lines(1)
-            .axis_style(axis_mesh_style) // make axis lines match mesh style
+            // Plotters' datetime tick generator overflows for a zero tick budget.
+            // Native labels are hidden; the readable date/time labels are below.
+            .x_labels(2)
+            .x_label_formatter(&|_| String::new())
+            .y_labels(6)
+            .disable_x_mesh()
+            .axis_style(WHITE)
+            .bold_line_style(BORDER)
+            .light_line_style(WHITE)
+            .y_label_style(("sans-serif", 22).into_font().color(&MUTED))
+            .y_label_formatter(&|v| format!("{v:.0}"))
+            .set_all_tick_mark_size(0)
             .draw()?;
-
-        ctx.draw_series(prices.iter().map(|hp| {
+        // Calm teal bars; higher-priced intervals become progressively darker.
+        ctx.draw_series(prices.iter().map(|p| {
+            let t = ((p.price - low) / (high - low).max(1.0)).clamp(0.0, 1.0);
+            let color = RGBColor(
+                (91.0 - 45.0 * t) as u8,
+                (183.0 - 70.0 * t) as u8,
+                (181.0 - 47.0 * t) as u8,
+            );
             Rectangle::new(
                 [
+                    (p.start_date.with_timezone(&tz), 0.0),
                     (
-                        hp.start_date.with_timezone(&chrono_tz::Europe::Helsinki),
-                        0.0,
-                    ),
-                    (
-                        (hp.start_date + Duration::minutes(15))
-                            .with_timezone(&chrono_tz::Europe::Helsinki),
-                        hp.price,
+                        (p.start_date + Duration::minutes(15)).with_timezone(&tz),
+                        p.price,
                     ),
                 ],
-                {
-                    let gradient = colorous::VIRIDIS;
-
-                    // We scale up the prices from 0.xx cents to something more usize friendly, as we need
-                    // that later to get the color gradient.
-                    let scale_up = 100;
-                    let current_price = (hp.price * scale_up as f32) as usize;
-
-                    // We "push" values up a bit artificially, so that we can avoid the first part of the color gradient.
-                    let tulttans_constant = 0.2;
-
-                    // This determins how dark the darkest price is. In the future, it could maybe be based on the
-                    // highest price of the day?
-                    let max_price: f32 = (30 * scale_up) as f32;
-                    let tulttans_max_price = (max_price * (1.0 + tulttans_constant)) as usize;
-
-                    // We "push" values up a bit artificially, so that we can avoid the first part of the color gradient.
-                    let tulttans_fix_to_avoid_spy_color = (tulttans_constant * max_price) as usize;
-
-                    let cor = gradient.eval_rational(
-                        tulttans_max_price
-                            - min(
-                                max(current_price, 0) + tulttans_fix_to_avoid_spy_color,
-                                tulttans_max_price,
-                            ),
-                        tulttans_max_price,
-                    );
-                    RGBColor(cor.r, cor.g, cor.b).filled()
-                },
+                color.filled(),
             )
         }))?;
-
-        // Highlight the step segment that corresponds to the current time in red,
-        // and annotate it above the line with a small gray connector.
-        if let Some(cur_hp) = prices.iter().rev().find(|hp| Utc::now() > hp.start_date) {
-            let seg_start = cur_hp.start_date.with_timezone(&TZ);
-            let seg_end = (cur_hp.start_date + Duration::minutes(18)).with_timezone(&TZ);
-            let seg_price = cur_hp.price;
-
-            // Draw the red step segment for the current interval
-            ctx.draw_series(LineSeries::new(
-                vec![(seg_start, seg_price), (seg_end, seg_price)],
-                ShapeStyle::from(&RED).stroke_width(2),
-            ))?;
-
-            // Annotation position: a bit to the right of the segment and above the line
-            let text_offset = Duration::minutes(20);
-            let y_offset_val = (max_price - min_price) * 0.06_f32; // vertical offset for the annotation
-            let label_pos = (seg_end + text_offset, seg_price + y_offset_val);
-
-            // Draw a thin gray connector from the step (midpoint) up to the annotation
-            let seg_mid = seg_start + Duration::seconds((seg_end - seg_start).num_seconds() / 2);
-            ctx.draw_series(LineSeries::new(
-                vec![
-                    (seg_mid, seg_price + y_offset_val / 10.0),
-                    (seg_mid, seg_price + y_offset_val),
-                ],
-                BLACK.mix(0.3).filled().stroke_width(1),
-            ))?;
-
-            // Draw the annotation text above the connector
-            let cur_label = format!("{seg_price:.2}");
-            let cur_label_style = style::TextStyle::from(("sans-serif", 26).into_font())
-                .pos(Pos::new(HPos::Center, VPos::Bottom)); // bottom anchor -> text sits above the coord
-            ctx.draw_series(std::iter::once(Text::new(
-                cur_label,
-                label_pos,
-                cur_label_style,
+        if minimum < 0.0 {
+            ctx.draw_series(std::iter::once(PathElement::new(
+                vec![(start, 0.0), (end, 0.0)],
+                MUTED.mix(0.5),
             )))?;
         }
-
-        ctx.draw_series(std::iter::once(
-            // Grey out past price
-            Rectangle::new(
-                [
-                    (start_date, f32::NEG_INFINITY),
-                    (current_date, f32::INFINITY),
-                ],
-                BLACK.mix(0.08).filled(),
-            ),
-        ))?;
-
-        // Draw date labels under the x-axis
-
-        let mut first = true;
-        // position the date labels in the reserved bottom label area (pixel coordinates)
-        // ChartBuilder used: margin = 20, left label area = 60, bottom label area = 80
-        let margin_px = 20.0;
-        let left_label_px = 80.0;
-        let bottom_label_px = 60.0;
-
-        // plotting area pixel bounds (approx) — we draw in the root so labels are not clipped by the plot area
-        let plot_left_px = margin_px + left_label_px;
-        let plot_right_px = (width as f64) - margin_px;
-        let plot_width_px = plot_right_px - plot_left_px;
-
-        let duration_secs = (end_date - start_date).num_seconds() as f64;
-
-        // draw date labels under the x-axis in the bottom label area using pixel coordinates on `root`
-        // at the same time, draw minor tick marks for each hour (except when hour % 4 == 0)
-        for hp in &prices {
-            let tick_dt = hp.start_date.with_timezone(&TZ);
-            if tick_dt.minute() != 0 {
+        if now >= first.start_date && now < last.start_date + Duration::minutes(15) {
+            let local_now = now.with_timezone(&tz);
+            ctx.draw_series(std::iter::once(PathElement::new(
+                vec![(local_now, minimum), (local_now, maximum)],
+                INK.mix(0.45).stroke_width(2),
+            )))?;
+            let point = ctx.backend_coord(&(local_now, maximum));
+            chart_style::text(
+                &root,
+                "NOW",
+                (point.0.clamp(130, 1350) - 18, 310),
+                18,
+                INK,
+                true,
+            )?;
+        }
+        let duration = (end - start).num_seconds() as f64;
+        let mut last_label_x = -1000;
+        for (index, p) in prices.iter().enumerate() {
+            let time = p.start_date.with_timezone(&tz);
+            if index != 0 && (time.minute() != 0 || time.hour() % 6 != 0) {
                 continue;
             }
-
-            // fraction across the x-range for this timestamp
-            let offset_secs = (tick_dt - start_date).num_seconds() as f64;
-            let frac = (offset_secs / duration_secs).clamp(0.0, 1.0);
-
-            // convert fraction to pixel X in root coordinates
-            let x_px = (plot_left_px + frac * plot_width_px).round() as i32;
-
-            // place the date label vertically inside the bottom label area (tweak as needed)
-            let y_px = (height as i32) - (margin_px as i32) - (bottom_label_px as i32 / 2);
-
-            if first || (tick_dt.hour() == 0) {
-                first = false;
-
-                let date_label = tick_dt.format("%d.%m").to_string();
-
-                // draw directly on the root drawing area using pixel coords so the text appears under the axis
-                root.draw(&Text::new(
-                    date_label,
-                    (x_px, y_px),
-                    x_label_style_date.clone(),
-                ))?;
+            let coord = ctx.backend_coord(&(time, minimum));
+            if coord.0 - last_label_x < 110
+                || (index != 0 && (end - time).num_seconds() as f64 / duration < 0.035)
+            {
+                continue;
             }
-
-            let x_axis_location = height as i32 - margin_px as i32 - 75;
-
-            // don't draw the minor tick mark if hour module 4 is zero
-            if tick_dt.hour() % 4 != 0 {
-                // draw a minor tick mark
-                root.draw(&Rectangle::new(
-                    [(x_px - 1, x_axis_location), (x_px, x_axis_location - 5)],
-                    RGBColor(150, 150, 150).filled(),
-                ))?;
+            last_label_x = coord.0;
+            let label = TextStyle::from(("sans-serif", 22))
+                .color(&MUTED)
+                .pos(Pos::new(HPos::Center, VPos::Top));
+            root.draw(&Text::new(
+                time.format("%H:%M").to_string(),
+                (coord.0, 835),
+                label.clone(),
+            ))?;
+            root.draw(&Text::new(
+                time.format("%-d %b").to_string(),
+                (coord.0, 867),
+                label,
+            ))?;
+        }
+        if let Some(panel) = panel {
+            root.draw(&PathElement::new(vec![(100, 925), (1400, 925)], BORDER))?;
+            chart_style::text(
+                &root,
+                "ESTIMATED ELECTRICITY · PER PC / MATCH",
+                (100, 955),
+                23,
+                INK,
+                true,
+            )?;
+            let mut y = 1005;
+            for (label, cost) in &panel.rows {
+                chart_style::text(
+                    &root,
+                    &chart_style::fit_text(label, 24, 980),
+                    (100, y),
+                    24,
+                    INK,
+                    false,
+                )?;
+                chart_style::text(
+                    &root,
+                    &chart_style::fit_text(cost, 24, 260),
+                    (1120, y),
+                    24,
+                    ACCENT,
+                    true,
+                )?;
+                y += 44;
+            }
+            y += 15;
+            for note in &panel.notes {
+                chart_style::text(
+                    &root,
+                    &chart_style::fit_text(note, 20, 1300),
+                    (100, y),
+                    20,
+                    MUTED,
+                    false,
+                )?;
+                y += 30;
             }
         }
-
         root.present()?;
     }
-
-    // Write to image
-    let image = image::RgbImage::from_raw(width as u32, height as u32, buffer)
-        .ok_or_else(|| eyre!("Image buffer not large enough"))?;
-
-    let mut bytes: Vec<u8> = Vec::new();
+    let image = image::RgbImage::from_raw(WIDTH, height, buffer)
+        .ok_or_else(|| eyre!("Invalid image buffer"))?;
+    let mut bytes = Vec::new();
     image.write_to(
         &mut std::io::Cursor::new(&mut bytes),
         image::ImageFormat::Png,
     )?;
-
-    // let bytes = buffer.as_bytes().to_vec();
-
     Ok(bytes)
 }
 
@@ -415,6 +333,91 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn preview_prices() -> (DateTime<Utc>, Vec<HourlyPrice>) {
+        use chrono::TimeZone;
+        let start = Utc.with_ymd_and_hms(2026, 9, 30, 0, 0, 0).unwrap();
+        let prices = (0..192)
+            .map(|index| HourlyPrice {
+                start_date: start + Duration::minutes(index * 15),
+                price: (index as f32 * 0.06).sin() * 8.0 + 6.0,
+            })
+            .collect();
+        (start + Duration::hours(14), prices)
+    }
+
+    #[test]
+    fn price_render_handles_negative_flat_and_missing_prices_and_growing_queue_panels() {
+        let (now, prices) = preview_prices();
+        let panel = ChartPanel {
+            rows: (0..12)
+                .map(|index| (format!("Queue {index} · If filled now"), "€0.06".into()))
+                .collect(),
+            notes: vec![
+                "500 W PC · Estimated 48-minute match".into(),
+                "Includes spot energy + variable transfer".into(),
+            ],
+        };
+        for (prices, panel) in [
+            (&prices[..], None),
+            (&prices[..], Some(&panel)),
+            (&prices[..1], None),
+        ] {
+            let bytes = render_price_chart(prices, now, TZ, panel).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap().to_rgb8();
+            assert_eq!(image.width(), WIDTH);
+            assert_eq!(image.height(), 930 + panel.map_or(0, ChartPanel::height));
+            assert_eq!(image.get_pixel(0, 0).0, [243, 246, 249]);
+            assert_eq!(image.get_pixel(100, image.height() - 40).0, [255, 255, 255]);
+            if let Some(panel) = panel {
+                let y = 1005 + (panel.rows.len() - 1) as u32 * 44;
+                assert!(
+                    (y..y + 30).any(|y| (1120..1350).any(|x| image.get_pixel(x, y).0 != [255; 3]))
+                );
+            }
+        }
+        assert!(render_price_chart(&[], now, TZ, None).is_err());
+    }
+
+    #[test]
+    #[ignore = "writes deterministic electricity previews for visual review"]
+    fn write_electricity_preview() {
+        let (now, prices) = preview_prices();
+        let panel = ChartPanel {
+            rows: vec![
+                ("Today 19:30".into(), "€0.06".into()),
+                ("Instant queue · If filled now".into(), "€0.05".into()),
+            ],
+            notes: vec![
+                "500 W PC · Estimated 48-minute match from 30 recent matches' rounds".into(),
+                "Includes spot energy + variable transfer; excludes fixed fees and electricity tax"
+                    .into(),
+            ],
+        };
+        fs::write(
+            "target/electricity-preview.png",
+            render_price_chart(&prices, now, TZ, Some(&panel)).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            "target/electricity-no-queues-preview.png",
+            render_price_chart(&prices, now, TZ, None).unwrap(),
+        )
+        .unwrap();
+        let panel = ChartPanel {
+            rows: (0..12)
+                .map(|index| (format!("Queue {index:02}"), "Unavailable".into()))
+                .collect(),
+            notes: vec![
+                "Estimates unavailable: no usable round data in recent match history".into(),
+            ],
+        };
+        fs::write(
+            "target/electricity-unavailable-preview.png",
+            render_price_chart(&prices, now, TZ, Some(&panel)).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn energy_cost_prorates_spot_prices_and_adds_distribution() {
         let start = chrono::DateTime::parse_from_rfc3339("2026-09-12T18:00:00Z")
@@ -457,7 +460,7 @@ mod tests {
     // It's ignored by default because it requires network access and the font asset.
     // Run explicitly with: cargo test -- --ignored
     #[tokio::test]
-    // #[ignore = "requires network and font asset; run explicitly with --ignored"]
+    #[ignore = "requires live price API; deterministic rendering is tested separately"]
     async fn write_price_chart_to_file() {
         let bytes = get_price_chart().await.expect("get_price_chart failed");
         assert!(!bytes.is_empty(), "returned image buffer was empty");

@@ -4,7 +4,7 @@ use crate::{
         activity::get_activity_inputfile,
         queue::{add_remove, list, predictions, remove_all},
         results::get_results_inputfile,
-        sahko::{get_sahko_inputfile, queue_cost_message},
+        sahko::get_sahko_inputfile,
         stats::{
             hall_of_fame, hall_of_shame, last_played, recent_form, stat_leaderboard, stats,
             team_flash_leaderboard,
@@ -117,10 +117,10 @@ async fn handle_cmd_inner(
         }
         Command::HallOfShame => hall_of_shame(&settings, &tz).await,
         Command::HallOfFame { rank_type } => hall_of_fame(&settings, rank_type).await,
-        Command::Temperature => temperature().await,
-        Command::Weather => weather_report().await,
+        Command::Temperature => temperature(tz).await,
+        Command::Weather => weather_report(tz).await,
         Command::Sahko => {
-            let photo = match get_sahko_inputfile().await {
+            let photo = match get_sahko_inputfile(&settings, &state, chat_id, &tz).await {
                 Ok(photo) => photo,
                 Err(e) => {
                     eprintln!("Failed to fetch price chart: {}", e);
@@ -129,9 +129,6 @@ async fn handle_cmd_inner(
             };
 
             send_photo(&bot, &chat_id, photo).await;
-            if let Some(cost_message) = queue_cost_message(&settings, &state, chat_id, &tz).await {
-                send_msg(&bot, &chat_id, &cost_message).await;
-            }
             return Some(());
         }
         Command::Activity { for_user } => {
