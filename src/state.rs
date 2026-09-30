@@ -125,14 +125,15 @@ impl State {
                 .map(|user| user.to_string().eq_ignore_ascii_case(&target.to_string()))
                 .unwrap_or(false);
             if is_self && self.recent_form_styles.get(&target_key) != Some(&options.style) {
-                self.recent_form_styles.insert(target_key, options.style);
+                self.recent_form_styles
+                    .insert(target_key, options.style.clone());
                 return (options, true);
             }
         } else {
             options.style = self
                 .recent_form_styles
                 .get(&target_key)
-                .copied()
+                .cloned()
                 .unwrap_or_default();
         }
         (options, false)
@@ -255,6 +256,41 @@ mod preference_tests {
             explicit_style: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn custom_theme_is_saved_restored_and_cannot_be_changed_by_another_user() {
+        let mut state = State::default();
+        let alice = user("alice");
+        let bob = user("bob");
+        let style = RecentFormStyle::Custom(["👍🏽", "🇫🇮", "➖"].map(str::to_owned));
+        let (resolved, changed) =
+            state.resolve_recent_form_options(Some(&alice), &alice, explicit(style.clone()));
+        assert_eq!(resolved.style, style);
+        assert!(changed);
+        let json = serde_json::to_string(&state).unwrap();
+        let mut restored: State = serde_json::from_str(&json).unwrap();
+        let (resolved, changed) =
+            restored.resolve_recent_form_options(Some(&bob), &alice, RecentFormOptions::default());
+        assert_eq!(resolved.style, style);
+        assert!(!changed);
+        let (_, changed) = restored.resolve_recent_form_options(
+            Some(&bob),
+            &alice,
+            explicit(RecentFormStyle::Burger),
+        );
+        assert!(!changed);
+        assert_eq!(restored.recent_form_styles.get(&alice), Some(&style));
+        let (_, changed) = restored.resolve_recent_form_options(
+            Some(&alice),
+            &alice,
+            explicit(RecentFormStyle::Squares),
+        );
+        assert!(changed);
+        assert_eq!(
+            restored.recent_form_styles.get(&alice),
+            Some(&RecentFormStyle::Squares)
+        );
     }
 
     #[test]

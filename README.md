@@ -40,6 +40,14 @@ The existing themes are `squares` (initial default), `letters`, `trophy`,
 win/loss/tie mapping consistent within that response and showing it in the legend.
 You can save `random` as your preference just like any other theme.
 
+Custom themes use three emoji in **win / loss / tie** order instead of a theme
+name: `/form 🍟🥬➖` or `/stats 🍟🥬➖ 5`. Spaces between the emoji also work,
+as does a target username: `/form @username 🍟 🥬 ➖ 10`.
+Flags, skin tones, and joined emoji count as one emoji each. Exactly three emoji
+are required; repeated emoji are allowed. Choosing a custom theme for yourself
+saves it for future `/form` and `/stats` requests, including after a restart.
+Choose a named theme again (for example, `/form squares`) to replace it.
+
 ## Match results
 
 `/results` shows the configured players' unique matches over the last 90 UTC

@@ -211,7 +211,7 @@ fn format_recent_results_with_options(
     } else {
         wins as f32 / (wins + losses) as f32 * 100.0
     };
-    let (win_icon, loss_icon, tie_icon) = match form_options.style {
+    let (win_icon, loss_icon, tie_icon) = match &form_options.style {
         RecentFormStyle::Squares => ("🟩", "🟥", "🟨"),
         RecentFormStyle::Letters => ("W", "L", "T"),
         RecentFormStyle::Trophy => ("🏆", "💀", "👔"),
@@ -240,6 +240,7 @@ fn format_recent_results_with_options(
         RecentFormStyle::Bike => ("🚴", "💥", "🚲"),
         RecentFormStyle::Car => ("🏎️", "🚧", "🚗"),
         RecentFormStyle::Traffic => ("🟢", "🔴", "🟡"),
+        RecentFormStyle::Custom(icons) => (icons[0].as_str(), icons[1].as_str(), icons[2].as_str()),
     };
     let result_marker = |result: &services::leetify::MatchResult| match result {
         services::leetify::MatchResult::Win => win_icon,
@@ -497,6 +498,28 @@ mod tests {
 
     fn result(result: MatchResult) -> RecentMatch {
         RecentMatch { result }
+    }
+
+    #[test]
+    fn custom_theme_renders_results_and_legend_in_win_loss_tie_order() {
+        let matches = vec![
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+            result(MatchResult::Tie),
+            result(MatchResult::Win),
+            result(MatchResult::Win),
+            result(MatchResult::Loss),
+        ];
+        let rendered = format_recent_results_with_options(
+            &matches,
+            RecentFormOptions {
+                style: RecentFormStyle::Custom(["🍟", "🥬", "➖"].map(str::to_owned)),
+                results_per_row: 5,
+                explicit_style: true,
+            },
+        );
+        assert_eq!(rendered,
+            "<i>🍟 win · 🥬 loss · ➖ tie</i>\n<pre>🍟🥬➖🍟🍟\n🥬</pre>\n<b>3W / 2L / 1T</b> · <b>60% win rate</b>");
     }
 
     #[test]

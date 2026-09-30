@@ -2,6 +2,7 @@ use chrono::NaiveTime;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::types::Username;
 
@@ -50,6 +51,7 @@ Choose a theme and 5 or 10 results per row:
 <code>/form halloween</code>
 <code>/stats burger 5</code>
 <code>/form @username cs2 10</code>
+Or supply three emoji in win/loss/tie order: <code>/form 🍟🥬➖</code>.
 
 squares (initial default), letters, trophy, drama, mood, moon, xmas,
 halloween, burger, panda, noodle, pirate, space, cat, dog, weather,
@@ -63,7 +65,7 @@ Without a theme, requests use the target player's saved preference."
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecentFormStyle {
     #[default]
@@ -95,9 +97,10 @@ pub enum RecentFormStyle {
     Bike,
     Car,
     Traffic,
+    Custom([String; 3]),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentFormOptions {
     pub style: RecentFormStyle,
     pub explicit_style: bool,
@@ -309,6 +312,7 @@ fn parse_recent_form_args(
 ) -> Result<(Option<Username>, RecentFormOptions), Box<dyn std::error::Error + Send + Sync>> {
     let mut for_user = None;
     let mut style = None;
+    let mut custom_icons = Vec::new();
     let mut results_per_row = None;
 
     for arg in args.as_deref().unwrap_or_default().split_whitespace() {
@@ -336,20 +340,40 @@ fn parse_recent_form_args(
                 )
                 .into());
             }
+        } else if arg.graphemes(true).all(|icon| emojis::get(icon).is_some()) {
+            custom_icons.extend(arg.graphemes(true).map(str::to_owned));
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "usage: /stats or /form [@username] [squares|letters|trophy|drama|mood|moon|xmas] [5|10]",
+                "usage: /stats or /form [@username] [theme or three emoji in win/loss/tie order] [5|10]",
             )
             .into());
         }
     }
 
+    if !custom_icons.is_empty() {
+        if style.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "only one recent-form style can be provided",
+            )
+            .into());
+        }
+        let icons: [String; 3] = custom_icons.try_into().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "custom themes need exactly three emoji in win/loss/tie order",
+            )
+        })?;
+        style = Some(RecentFormStyle::Custom(icons));
+    }
+
+    let explicit_style = style.is_some();
     Ok((
         for_user,
         RecentFormOptions {
             style: style.unwrap_or_default(),
-            explicit_style: style.is_some(),
+            explicit_style,
             results_per_row: results_per_row.unwrap_or(10),
         },
     ))
@@ -524,6 +548,62 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_form_themes_accept_three_complete_emoji() {
+        for command in ["stats", "form"] {
+            for (args, icons) in [
+                ("🍟🥬➖", ["🍟", "🥬", "➖"]),
+                ("🍟 🥬 ➖", ["🍟", "🥬", "➖"]),
+                ("👍🏽👨‍👩‍👧‍👦🇫🇮", ["👍🏽", "👨‍👩‍👧‍👦", "🇫🇮"]),
+                ("☀️🏳️‍🌈1️⃣", ["☀️", "🏳️‍🌈", "1️⃣"]),
+                ("🍟🍟🍟", ["🍟", "🍟", "🍟"]),
+            ] {
+                let parsed = parse_cmd(&format!("/{command} @player {args} 5"))
+                    .unwrap()
+                    .unwrap();
+                let (for_user, options) = match parsed {
+                    Command::Stats {
+                        for_user,
+                        form_options,
+                    }
+                    | Command::RecentForm {
+                        for_user,
+                        form_options,
+                    } => (for_user, form_options),
+                    _ => panic!("unexpected command"),
+                };
+                assert_eq!(for_user, Some(Username::new("player".to_string())));
+                assert_eq!(
+                    options.style,
+                    RecentFormStyle::Custom(icons.map(str::to_owned))
+                );
+                assert!(options.explicit_style);
+                assert_eq!(options.results_per_row, 5);
+            }
+        }
+    }
+
+    #[test]
+    fn custom_form_themes_reject_bad_counts_text_and_multiple_styles() {
+        for command in ["stats", "form"] {
+            for args in [
+                "🍟",
+                "🍟🥬",
+                "🍟🥬➖🍔",
+                "🍟🥬➖ 🍔🥬➖",
+                "abc",
+                "🍟a➖",
+                "<b>🍟🥬➖</b>",
+                "🍟🥬&",
+                "burger 🍟🥬➖",
+                "🍟🥬➖ burger",
+                "🍟🥬➖ 5 10",
+            ] {
+                assert!(parse_cmd(&format!("/{command} {args}")).is_err(), "{args}");
+            }
+        }
+    }
 
     #[test]
     fn recent_form_parser_distinguishes_explicit_icons_from_row_width() {
