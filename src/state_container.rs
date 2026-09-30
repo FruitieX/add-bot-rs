@@ -1,4 +1,4 @@
-use crate::state::State;
+use crate::{command::RecentFormOptions, state::State, types::Username};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -36,17 +36,32 @@ impl StateContainer {
     }
 
     /// Writes new state to the RwLock and JSON state file.
-    pub async fn write(&self, state: State) {
-        // Only hold onto RwLock inside this block
-        {
-            let mut unlocked_state = self.state.write().await;
-            *unlocked_state = state.clone();
-        }
-
-        let json = serde_json::to_string(&state).unwrap();
+    pub async fn write(&self, mut state: State) {
+        let mut unlocked_state = self.state.write().await;
+        // Queue handlers use snapshots. Preserve preferences updated since that snapshot.
+        state.recent_form_styles = unlocked_state.recent_form_styles.clone();
+        *unlocked_state = state;
+        let json = serde_json::to_string(&*unlocked_state).unwrap();
         let file_res = tokio::fs::write(STATE_FILE_PATH, json).await;
         if let Err(error) = file_res {
             eprintln!("Error while writing state file: {}", error);
         }
+    }
+
+    pub async fn resolve_recent_form_options(
+        &self,
+        requester: Option<&Username>,
+        target: &Username,
+        options: RecentFormOptions,
+    ) -> RecentFormOptions {
+        let mut state = self.state.write().await;
+        let (options, changed) = state.resolve_recent_form_options(requester, target, options);
+        if changed {
+            let json = serde_json::to_string(&*state).unwrap();
+            if let Err(error) = tokio::fs::write(STATE_FILE_PATH, json).await {
+                eprintln!("Error while writing state file: {error}");
+            }
+        }
+        options
     }
 }

@@ -53,6 +53,13 @@ pub async fn handle_cmd(
             form_options,
         } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
+            let requester = user
+                .username
+                .as_ref()
+                .map(|name| crate::types::Username::new(name.clone()));
+            let form_options = sc
+                .resolve_recent_form_options(requester.as_ref(), &username, form_options)
+                .await;
             stats(&settings, &username, form_options).await
         }
         Command::RecentForm {
@@ -60,6 +67,13 @@ pub async fn handle_cmd(
             form_options,
         } => {
             let username = for_user.unwrap_or_else(|| mk_username(&user));
+            let requester = user
+                .username
+                .as_ref()
+                .map(|name| crate::types::Username::new(name.clone()));
+            let form_options = sc
+                .resolve_recent_form_options(requester.as_ref(), &username, form_options)
+                .await;
             recent_form(&settings, &username, form_options).await
         }
         Command::LastPlayed { for_user } => {

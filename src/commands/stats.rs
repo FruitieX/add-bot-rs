@@ -216,6 +216,12 @@ fn format_recent_results_with_options(
         (RecentFormStyle::Mood, services::leetify::MatchResult::Win) => "😎",
         (RecentFormStyle::Mood, services::leetify::MatchResult::Loss) => "😭",
         (RecentFormStyle::Mood, services::leetify::MatchResult::Tie) => "😐",
+        (RecentFormStyle::Moon, services::leetify::MatchResult::Win) => "🌞",
+        (RecentFormStyle::Moon, services::leetify::MatchResult::Loss) => "🌚",
+        (RecentFormStyle::Moon, services::leetify::MatchResult::Tie) => "🌗",
+        (RecentFormStyle::Xmas, services::leetify::MatchResult::Win) => "🎁",
+        (RecentFormStyle::Xmas, services::leetify::MatchResult::Loss) => "🪨",
+        (RecentFormStyle::Xmas, services::leetify::MatchResult::Tie) => "🎄",
     };
     let legend = match form_options.style {
         RecentFormStyle::Squares => "🟩 win · 🟥 loss · 🟨 tie",
@@ -223,6 +229,8 @@ fn format_recent_results_with_options(
         RecentFormStyle::Trophy => "🏆 win · 💀 loss · 👔 tie",
         RecentFormStyle::Drama => "🎉 win · 🪦 loss · 🤝 tie",
         RecentFormStyle::Mood => "😎 win · 😭 loss · 😐 tie",
+        RecentFormStyle::Moon => "🌞 win · 🌚 loss · 🌗 tie",
+        RecentFormStyle::Xmas => "🎁 win · 🪨 loss · 🎄 tie",
     };
     let results = recent_matches
         .iter()

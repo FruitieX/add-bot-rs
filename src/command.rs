@@ -1,6 +1,7 @@
 use chrono::NaiveTime;
 use lazy_static::lazy_static;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 use crate::types::Username;
 
@@ -36,28 +37,28 @@ The following commands are supported:
 ```
 Most commands accept an optional `@username` argument, which defaults to yourself.
 Append a style and/or 5 or 10 to `/stats` or `/form` to choose a format and row width.
-Styles: squares by default, letters, trophy, drama, mood."
+Styles: squares initially, letters, trophy, drama, mood, moon, xmas.
+An explicit style on your own stats or form saves your icon preference. Requests without a style use the target user's saved preference."
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RecentFormStyle {
+    #[default]
     Squares,
     Letters,
     Trophy,
     Drama,
     Mood,
-}
-
-impl Default for RecentFormStyle {
-    fn default() -> Self {
-        Self::Squares
-    }
+    Moon,
+    Xmas,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecentFormOptions {
     pub style: RecentFormStyle,
+    pub explicit_style: bool,
     pub results_per_row: usize,
 }
 
@@ -65,6 +66,7 @@ impl Default for RecentFormOptions {
     fn default() -> Self {
         Self {
             style: RecentFormStyle::default(),
+            explicit_style: false,
             results_per_row: 10,
         }
     }
@@ -233,6 +235,8 @@ fn parse_recent_form_style(s: &str) -> Option<RecentFormStyle> {
         "trophy" | "trophies" | "medals" => Some(RecentFormStyle::Trophy),
         "drama" | "dramatic" => Some(RecentFormStyle::Drama),
         "mood" | "vibes" => Some(RecentFormStyle::Mood),
+        "moon" | "sunmoon" => Some(RecentFormStyle::Moon),
+        "xmas" | "christmas" | "jul" => Some(RecentFormStyle::Xmas),
         _ => None,
     }
 }
@@ -272,7 +276,7 @@ fn parse_recent_form_args(
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "usage: /stats or /form [@username] [squares|letters|trophy|drama|mood] [5|10]",
+                "usage: /stats or /form [@username] [squares|letters|trophy|drama|mood|moon|xmas] [5|10]",
             )
             .into());
         }
@@ -282,6 +286,7 @@ fn parse_recent_form_args(
         for_user,
         RecentFormOptions {
             style: style.unwrap_or_default(),
+            explicit_style: style.is_some(),
             results_per_row: results_per_row.unwrap_or(10),
         },
     ))
@@ -456,6 +461,35 @@ pub fn parse_cmd(text: &str) -> Result<Option<Command>, Box<dyn std::error::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_form_parser_distinguishes_explicit_icons_from_row_width() {
+        for command in ["stats", "form"] {
+            for (args, explicit, expected_style) in [
+                ("", false, RecentFormStyle::Squares),
+                ("5", false, RecentFormStyle::Squares),
+                ("squares", true, RecentFormStyle::Squares),
+                ("@player trophy 5", true, RecentFormStyle::Trophy),
+                ("moon 5", true, RecentFormStyle::Moon),
+                ("xmas", true, RecentFormStyle::Xmas),
+                ("christmas", true, RecentFormStyle::Xmas),
+                ("jul", true, RecentFormStyle::Xmas),
+            ] {
+                let parsed = parse_cmd(&format!("/{command} {args}")).unwrap().unwrap();
+                let options = match parsed {
+                    Command::Stats { form_options, .. }
+                    | Command::RecentForm { form_options, .. } => form_options,
+                    _ => panic!("unexpected command"),
+                };
+                assert_eq!(options.explicit_style, explicit);
+                assert_eq!(options.style, expected_style);
+                assert_eq!(
+                    options.results_per_row,
+                    if args.contains('5') { 5 } else { 10 }
+                );
+            }
+        }
+    }
 
     #[test]
     fn prediction_match_count_defaults_to_thirty() {
