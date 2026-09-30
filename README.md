@@ -2,6 +2,23 @@
 
 trashety trash Telegram bot
 
+## Match results
+
+`/results` shows the configured players' unique matches over the last 90 UTC
+calendar days. `/results @username` shows that player's matches instead.
+
+The chart includes win/loss/tie totals, a rolling 20-match win rate, and one
+green/red/yellow square per match, aligned by date. Matches within each day run
+from top to bottom. The strip grows vertically to show busy days without hiding
+results; blank days mean no games.
+
+Both percentages exclude ties (`wins / (wins + losses)`). Ties still occupy a
+place in the 20-match window and remain visible in the totals and strip. The
+trend starts once 20 known matches are available; available matches from before
+the displayed period can prime that window. A window containing only ties has no
+percentage. Gaps of more than three days use a dotted connector with no shaded
+area. No matches, short histories, and tie-only histories have explicit messages.
+
 ## Electricity forecast
 
 `/el` always sends the existing Porssisahko price chart. When the chat has

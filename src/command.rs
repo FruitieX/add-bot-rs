@@ -31,7 +31,7 @@ The following commands are supported:
 - /teamflash    Flashbangs thrown and teammates flashed per round.
 - /flashes      Flashbangs thrown and teammates flashed per round.
 - /activity     Daily games played by all players (last 90 days).
-- /results      Daily wins, losses, and ties for configured players (last 90 days).
+- /results      Win-rate trend and match results for configured players (last 90 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
 ```
@@ -129,7 +129,7 @@ pub enum Command {
         for_user: Option<Username>,
     },
 
-    /// Daily wins, losses, and ties chart for last 90 days (optionally filter by @username)
+    /// Win-rate trend and match results for last 90 days (optionally filter by @username)
     Results {
         for_user: Option<Username>,
     },
