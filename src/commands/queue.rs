@@ -42,7 +42,7 @@ async fn handle_queue_timeout(
         format!("{} queue timed out!\n{}", queue_id, players_str)
     };
 
-    send_msg(bot, chat_id, &text, false).await;
+    send_msg(bot, chat_id, &text).await;
 
     Some(())
 }

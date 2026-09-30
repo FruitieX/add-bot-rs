@@ -33,18 +33,8 @@ pub fn fmt_naive_time(t: &NaiveTime) -> String {
 }
 
 /// Helper for sending Telegram messages (and logging errors to stderr).
-pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str, markdown: bool) {
-    let request = if markdown {
-        // Telegram wants me to escape these (and probably some other)
-        // characters in this ParseMode.
-        let text = text.replace('-', r"\-");
-        let text = text.replace('.', r"\.");
-
-        bot.send_message(*chat_id, text)
-            .parse_mode(ParseMode::MarkdownV2)
-    } else {
-        bot.send_message(*chat_id, text).parse_mode(ParseMode::Html)
-    };
+pub async fn send_msg(bot: &Bot, chat_id: &ChatId, text: &str) {
+    let request = bot.send_message(*chat_id, text).parse_mode(ParseMode::Html);
 
     let res = request.send().await;
 

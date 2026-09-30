@@ -11,7 +11,7 @@ lazy_static! {
         "add-bot v{VERSION}
 
 The following commands are supported:
-```
+<pre>
 - /1930         Add/remove player from timed queue at 19:30.
 - /add          Add/remove player from the instant queue.
 - /ls           List existing queues.
@@ -34,9 +34,9 @@ The following commands are supported:
 - /results      Win-rate trend and match results for configured players (last 90 days).
 - /temperature  Current temperature for configured location.
 - /weather      Weather for configured location.
-```
-Most commands accept an optional `@username` argument, which defaults to yourself.
-Append a style and/or 5 or 10 to `/stats` or `/form` to choose a format and row width.
+</pre>
+Most commands accept an optional <code>@username</code> argument, which defaults to yourself.
+Append a style and/or 5 or 10 to <code>/stats</code> or <code>/form</code> to choose a format and row width.
 Styles: squares initially, letters, trophy, drama, mood, moon, xmas,
 halloween, burger, panda, noodle, pirate, space, cat, dog, weather, garden, arcade,
 slop, hotdog, stocks, team, random, counterstrike (cs2, kynäri), mistakes, bike, car, traffic.

@@ -69,8 +69,6 @@ async fn handle_cmd_inner(
     let chat_id = msg.chat.id;
     let user = msg.from?;
 
-    let markdown = matches!(cmd, Command::Help);
-
     let text = match cmd {
         Command::Help => Command::help(),
         Command::AddRemove { time, for_user } => {
@@ -132,7 +130,7 @@ async fn handle_cmd_inner(
 
             send_photo(&bot, &chat_id, photo).await;
             if let Some(cost_message) = queue_cost_message(&settings, &state, chat_id, &tz).await {
-                send_msg(&bot, &chat_id, &cost_message, false).await;
+                send_msg(&bot, &chat_id, &cost_message).await;
             }
             return Some(());
         }
@@ -164,7 +162,7 @@ async fn handle_cmd_inner(
         Command::TeamFlash => team_flash_leaderboard(&settings).await,
     };
 
-    send_msg(&bot, &chat_id, &text, markdown).await;
+    send_msg(&bot, &chat_id, &text).await;
 
     Some(())
 }
