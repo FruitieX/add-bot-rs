@@ -120,26 +120,12 @@ pub(crate) fn render_price_chart(
     let padding = ((high - low) * 0.12).max(2.0);
     let minimum = if low < 0.0 { low - padding } else { 0.0 };
     let maximum = high.max(5.0) + padding;
-    let height = 930 + panel.map_or(0, ChartPanel::height);
+    let height = 810 + panel.map_or(0, ChartPanel::height);
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = ChartBackend(BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)))
             .into_drawing_area();
         chart_style::frame(&root)?;
-        chart_style::text(&root, "Electricity prices", (100, 86), 68, INK, true)?;
-        chart_style::text(
-            &root,
-            &format!(
-                "{}–{} · {} · 15-minute prices",
-                start.format("%-d %b"),
-                end.format("%-d %b %Y"),
-                tz
-            ),
-            (100, 150),
-            40,
-            MUTED,
-            false,
-        )?;
         for (x, value, label) in [
             (
                 100,
@@ -151,29 +137,44 @@ pub(crate) fn render_price_chart(
             (590, format!("{low:.2}"), "LOW · c/kWh"),
             (1080, format!("{high:.2}"), "HIGH · c/kWh"),
         ] {
-            chart_style::text(&root, &value, (x, 210), 68, INK, true)?;
-            chart_style::text(&root, label, (x, 270), 38, MUTED, true)?;
+            chart_style::text(&root, &value, (x, 90), 68, INK, true)?;
+            chart_style::text(&root, label, (x, 150), 38, MUTED, true)?;
         }
-        let plot = root.clone().shrink((80, 330), (1340, 480));
+        let plot = root.clone().shrink((80, 210), (1340, 480));
         let mut ctx = ChartBuilder::on(&plot)
             .set_label_area_size(LabelAreaPosition::Left, 90)
             .set_label_area_size(LabelAreaPosition::Bottom, 0)
             .margin_right(10)
             .margin_top(10)
             .build_cartesian_2d(start..end, minimum..maximum)?;
-        // Restore the original fixed price scale: cheap yellow/green, expensive purple.
-        ctx.draw_series(prices.iter().map(|p| {
-            let color = price_color(p.price);
-            Rectangle::new(
-                [
-                    (p.start_date.with_timezone(&tz), 0.0),
-                    (
-                        (p.start_date + Duration::minutes(15)).with_timezone(&tz),
-                        p.price,
-                    ),
-                ],
-                color.filled(),
-            )
+        let local_now = now.with_timezone(&tz);
+        let past_end = local_now.clamp(start, end);
+        if past_end > start {
+            ctx.draw_series(std::iter::once(Rectangle::new(
+                [(start, minimum), (past_end, maximum)],
+                RGBColor(239, 242, 245).filled(),
+            )))?;
+        }
+        // Split the current interval at NOW: elapsed prices are muted, while
+        // upcoming prices retain the original fixed Viridis price scale.
+        ctx.draw_series(prices.iter().flat_map(|price| {
+            let from = price.start_date.with_timezone(&tz);
+            let to = (price.start_date + Duration::minutes(15)).with_timezone(&tz);
+            let split = local_now.clamp(from, to);
+            let mut bars = Vec::with_capacity(2);
+            if split > from {
+                bars.push(Rectangle::new(
+                    [(from, 0.0), (split, price.price)],
+                    RGBColor(169, 180, 190).filled(),
+                ));
+            }
+            if split < to {
+                bars.push(Rectangle::new(
+                    [(split, 0.0), (to, price.price)],
+                    price_color(price.price).filled(),
+                ));
+            }
+            bars
         }))?;
         // Draw guides over the bars as well as the background, so prices can
         // be read across filled intervals. Keep manual time ticks aligned with
@@ -240,7 +241,7 @@ pub(crate) fn render_price_chart(
             chart_style::text(
                 &root,
                 "NOW",
-                (point.0.clamp(130, 1350) - 18, 310),
+                (point.0.clamp(130, 1350) - 18, 190),
                 36,
                 INK,
                 true,
@@ -266,29 +267,29 @@ pub(crate) fn render_price_chart(
                 .pos(Pos::new(HPos::Center, VPos::Top));
             root.draw(&Text::new(
                 time.format("%H:%M").to_string(),
-                (coord.0, 835),
+                (coord.0, 715),
                 label.clone(),
             ))?;
             if last_label_date != Some(time.date_naive()) {
                 root.draw(&Text::new(
                     time.format("%-d %b").to_string(),
-                    (coord.0, 867),
+                    (coord.0, 747),
                     label,
                 ))?;
                 last_label_date = Some(time.date_naive());
             }
         }
         if let Some(panel) = panel {
-            root.draw(&PathElement::new(vec![(100, 925), (1400, 925)], BORDER))?;
+            root.draw(&PathElement::new(vec![(100, 805), (1400, 805)], BORDER))?;
             chart_style::text(
                 &root,
                 "ESTIMATED COST · PER PC / MATCH",
-                (100, 955),
+                (100, 835),
                 40,
                 INK,
                 true,
             )?;
-            let mut y = 1005;
+            let mut y = 885;
             for (label, cost) in &panel.rows {
                 chart_style::text(
                     &root,
@@ -412,11 +413,11 @@ mod tests {
             let bytes = render_price_chart(prices, now, TZ, panel).unwrap();
             let image = image::load_from_memory(&bytes).unwrap().to_rgb8();
             assert_eq!(image.width(), WIDTH);
-            assert_eq!(image.height(), 930 + panel.map_or(0, ChartPanel::height));
+            assert_eq!(image.height(), 810 + panel.map_or(0, ChartPanel::height));
             assert_eq!(image.get_pixel(0, 0).0, [243, 246, 249]);
             assert_eq!(image.get_pixel(100, image.height() - 40).0, [255, 255, 255]);
             if let Some(panel) = panel {
-                let y = 1005 + (panel.rows.len() - 1) as u32 * 56;
+                let y = 885 + (panel.rows.len() - 1) as u32 * 56;
                 assert!(
                     (y..y + 30).any(|y| (1120..1350).any(|x| image.get_pixel(x, y).0 != [255; 3]))
                 );

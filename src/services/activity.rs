@@ -101,42 +101,26 @@ fn render_calendar(
 ) -> Result<Vec<u8>> {
     let data = calendar_data(per_player, games, target, tz, today);
     let rows = data.players.len().min(10).div_ceil(2);
-    let height = 990 + rows as u32 * 44;
+    let height = 865 + rows as u32 * 44 + if notice.is_some() { 45 } else { 0 };
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = ChartBackend(BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)))
             .into_drawing_area();
         chart_style::frame(&root)?;
-        chart_style::text(&root, "Match activity", (100, 86), 68, INK, true)?;
         let scope = target
             .map(ToString::to_string)
             .unwrap_or_else(|| "Configured players".into());
         chart_style::text(
             &root,
-            &chart_style::fit_text(
-                &format!(
-                    "{scope} · {}–{} · 90 days · {tz}",
-                    data.start.format("%-d %b"),
-                    today.format("%-d %b %Y")
-                ),
-                40,
-                1300,
+            &format!(
+                "{} · Match activity",
+                chart_style::fit_text(&scope, 68, 760)
             ),
-            (100, 150),
-            40,
-            MUTED,
-            false,
+            (100, 86),
+            68,
+            INK,
+            true,
         )?;
-        if let Some(notice) = notice {
-            chart_style::text(
-                &root,
-                &chart_style::fit_text(notice, 36, 1300),
-                (100, 180),
-                36,
-                MUTED,
-                false,
-            )?;
-        }
         for (x, value, label) in [
             (100, data.counts.iter().sum::<u32>(), "RECORDED MATCHES"),
             (
@@ -146,8 +130,8 @@ fn render_calendar(
             ),
             (1080, *data.counts.iter().max().unwrap_or(&0), "BUSIEST DAY"),
         ] {
-            chart_style::text(&root, &value.to_string(), (x, 210), 68, INK, true)?;
-            chart_style::text(&root, label, (x, 270), 38, MUTED, true)?;
+            chart_style::text(&root, &value.to_string(), (x, 150), 68, INK, true)?;
+            chart_style::text(&root, label, (x, 210), 38, MUTED, true)?;
         }
         let monday =
             data.start - Duration::days(data.start.weekday().num_days_from_monday() as i64);
@@ -155,7 +139,7 @@ fn render_calendar(
             .iter()
             .enumerate()
         {
-            chart_style::text(&root, day, (100, 355 + row as i32 * 52), 38, MUTED, false)?;
+            chart_style::text(&root, day, (100, 295 + row as i32 * 52), 38, MUTED, false)?;
         }
         let peak = data.counts.iter().copied().max().unwrap_or(1).max(1);
         let shade = |count: u32| {
@@ -174,7 +158,7 @@ fn render_calendar(
             let day = data.start + Duration::days(index as i64);
             let column = (day - monday).num_days() / 7;
             let x = 200 + column as i32 * 82;
-            let y = 350 + day.weekday().num_days_from_monday() as i32 * 52;
+            let y = 290 + day.weekday().num_days_from_monday() as i32 * 52;
             root.draw(&Rectangle::new(
                 [(x, y), (x + 70, y + 42)],
                 shade(*count).filled(),
@@ -184,12 +168,12 @@ fn render_calendar(
             }
         }
         for (x, month) in months {
-            chart_style::text(&root, &month, (x, 312), 38, MUTED, false)?;
+            chart_style::text(&root, &month, (x, 252), 38, MUTED, false)?;
         }
         chart_style::text(
             &root,
             &data.start.format("%-d %b").to_string(),
-            (200, 735),
+            (200, 675),
             36,
             MUTED,
             false,
@@ -197,12 +181,12 @@ fn render_calendar(
         chart_style::text(
             &root,
             &today.format("%-d %b").to_string(),
-            (1250, 735),
+            (1250, 675),
             36,
             MUTED,
             false,
         )?;
-        chart_style::text(&root, "Fewer", (960, 785), 36, MUTED, false)?;
+        chart_style::text(&root, "Fewer", (960, 725), 36, MUTED, false)?;
         for index in 0..5 {
             let t = 0.25 + 0.75 * index as f64 / 4.0;
             let color = if index == 0 {
@@ -215,9 +199,9 @@ fn render_calendar(
                 )
             };
             let x = 1070 + index * 38;
-            root.draw(&Rectangle::new([(x, 785), (x + 30, 815)], color.filled()))?;
+            root.draw(&Rectangle::new([(x, 725), (x + 30, 755)], color.filled()))?;
         }
-        chart_style::text(&root, "More", (1280, 785), 36, MUTED, false)?;
+        chart_style::text(&root, "More", (1280, 725), 36, MUTED, false)?;
         chart_style::text(
             &root,
             if target.is_some() {
@@ -225,7 +209,7 @@ fn render_calendar(
             } else {
                 "MATCHES BY PLAYER · TOP 10"
             },
-            (100, 840),
+            (100, 780),
             38,
             INK,
             true,
@@ -236,28 +220,22 @@ fn render_calendar(
             chart_style::text(
                 &root,
                 &text,
-                (x, 900 + (index / 2) as i32 * 44),
+                (x, 840 + (index / 2) as i32 * 44),
                 40,
                 INK,
                 false,
             )?;
         }
-        chart_style::text(
-            &root,
-            "Shared matches counted once; player totals overlap for shared matches.",
-            (100, height as i32 - 90),
-            36,
-            MUTED,
-            false,
-        )?;
-        chart_style::text(
-            &root,
-            "Available Leetify history; older matches may be missing.",
-            (100, height as i32 - 60),
-            36,
-            MUTED,
-            false,
-        )?;
+        if let Some(notice) = notice {
+            chart_style::text(
+                &root,
+                &chart_style::fit_text(notice, 36, 1300),
+                (100, height as i32 - 75),
+                36,
+                MUTED,
+                false,
+            )?;
+        }
         root.present()?;
     }
     let image = image::RgbImage::from_raw(WIDTH, height, buffer)
@@ -582,7 +560,7 @@ fn render_activity_bars(
     let legend_entries = top_players_with_counts.len() + usize::from(has_others);
     let legend_rows = legend_entries.div_ceil(2);
     let width = WIDTH as usize;
-    let height = 1080 + legend_rows * 44;
+    let height = 980 + legend_rows * 44 + if notice.is_some() { 45 } else { 0 };
     let mut buffer = vec![0; width * height * 3];
     {
         let root = ChartBackend(BitMapBackend::with_buffer(
@@ -591,36 +569,20 @@ fn render_activity_bars(
         ))
         .into_drawing_area();
         chart_style::frame(&root)?;
-        chart_style::text(&root, "Match activity", (100, 86), 68, INK, true)?;
         let scope = filter_user
             .map(ToString::to_string)
             .unwrap_or_else(|| "Configured players".into());
         chart_style::text(
             &root,
-            &chart_style::fit_text(
-                &format!(
-                    "{scope}  ·  {} – {}  ·  90 days · {tz}",
-                    start.format("%-d %b"),
-                    today.format("%-d %b %Y")
-                ),
-                40,
-                1300,
+            &format!(
+                "{} · Match activity",
+                chart_style::fit_text(&scope, 68, 760)
             ),
-            (100, 150),
-            40,
-            MUTED,
-            false,
+            (100, 86),
+            68,
+            INK,
+            true,
         )?;
-        if let Some(notice) = notice {
-            chart_style::text(
-                &root,
-                &chart_style::fit_text(notice, 36, 1300),
-                (100, 180),
-                36,
-                MUTED,
-                false,
-            )?;
-        }
         let total = counts.values().sum::<u32>();
         let active_days = counts.values().filter(|count| **count > 0).count();
         let busiest = counts.values().copied().max().unwrap_or(0);
@@ -629,10 +591,10 @@ fn render_activity_bars(
             (590, active_days.to_string(), "ACTIVE DAYS"),
             (1080, busiest.to_string(), "BUSIEST DAY"),
         ] {
-            chart_style::text(&root, &value, (x, 210), 68, INK, true)?;
-            chart_style::text(&root, label, (x, 270), 38, MUTED, true)?;
+            chart_style::text(&root, &value, (x, 150), 68, INK, true)?;
+            chart_style::text(&root, label, (x, 210), 38, MUTED, true)?;
         }
-        let plot = root.clone().shrink((80, 330), (1340, 480));
+        let plot = root.clone().shrink((80, 270), (1340, 480));
         let mut ctx = ChartBuilder::on(&plot)
             .set_label_area_size(LabelAreaPosition::Left, 90)
             .set_label_area_size(LabelAreaPosition::Bottom, 0)
@@ -668,7 +630,7 @@ fn render_activity_bars(
             let point = ctx.backend_coord(&(date, 0.0));
             root.draw(&Text::new(
                 date.format("%-d %b").to_string(),
-                (point.0, 835),
+                (point.0, 775),
                 TextStyle::from(("sans-serif", 40))
                     .color(&MUTED)
                     .pos(Pos::new(HPos::Center, VPos::Top)),
@@ -752,7 +714,7 @@ fn render_activity_bars(
             }
         }
 
-        root.draw(&PathElement::new(vec![(100, 885), (1400, 885)], BORDER))?;
+        root.draw(&PathElement::new(vec![(100, 825), (1400, 825)], BORDER))?;
         chart_style::text(
             &root,
             if filter_user.is_some() {
@@ -760,7 +722,7 @@ fn render_activity_bars(
             } else {
                 "PLAYERS · RECORDED MATCHES"
             },
-            (100, 910),
+            (100, 850),
             40,
             INK,
             true,
@@ -781,7 +743,7 @@ fn render_activity_bars(
         }
         for (index, (label, color)) in entries.iter().enumerate() {
             let x = 100 + (index % 2) as i32 * 660;
-            let y = 958 + (index / 2) as i32 * 44;
+            let y = 898 + (index / 2) as i32 * 44;
             root.draw(&Rectangle::new(
                 [(x, y + 3), (x + 18, y + 21)],
                 color.filled(),
@@ -798,20 +760,22 @@ fn render_activity_bars(
         chart_style::text(
             &root,
             "Colors mark participants; segments are not player match totals.",
-            (100, height as i32 - 105),
+            (100, height as i32 - if notice.is_some() { 105 } else { 65 }),
             36,
             MUTED,
             false,
         )?;
 
-        chart_style::text(
-            &root,
-            "Available history may omit older matches.",
-            (100, height as i32 - 65),
-            36,
-            MUTED,
-            false,
-        )?;
+        if let Some(notice) = notice {
+            chart_style::text(
+                &root,
+                &chart_style::fit_text(notice, 36, 1300),
+                (100, height as i32 - 65),
+                36,
+                MUTED,
+                false,
+            )?;
+        }
         root.present()?;
     }
 

@@ -28,9 +28,9 @@ const DAYS_SHOWN: usize = 90;
 const FORM_WINDOW: usize = 20;
 const LEFT: i32 = 150;
 const RIGHT: i32 = 1330;
-const TOP: i32 = 390;
-const BOTTOM: i32 = 810;
-const TILE_TOP: i32 = 970;
+const TOP: i32 = 330;
+const BOTTOM: i32 = 750;
+const TILE_TOP: i32 = 910;
 const TILE_STEP: i32 = 17;
 const WIN: RGBColor = RGBColor(52, 199, 89);
 const LOSS: RGBColor = RGBColor(255, 59, 48);
@@ -65,7 +65,6 @@ struct TrendPoint {
 }
 
 struct ResultsData {
-    tz: Tz,
     exclusions: String,
     start: NaiveDate,
     end: NaiveDate,
@@ -89,7 +88,6 @@ fn collect_results_local(mut games: Vec<LeetifyGame>, today: NaiveDate, tz: Tz) 
     let end = today + Duration::days(1);
     games.sort_by_key(|game| (game.game_finished_at, game_key(game)));
     let mut data = ResultsData {
-        tz,
         exclusions: String::new(),
         start,
         end,
@@ -376,77 +374,54 @@ fn render_results_with_notice(
 ) -> Result<Vec<u8>> {
     let rows = data.daily.iter().map(Vec::len).max().unwrap_or(0).max(4);
     let legend_y = TILE_TOP + rows as i32 * TILE_STEP + 28;
-    let height = (legend_y + 180) as u32;
+    let note_rows = usize::from(notice.is_some()) + usize::from(!data.exclusions.is_empty());
+    let height = (legend_y + 80 + note_rows as i32 * 45) as u32;
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)).into_drawing_area();
         super::chart_style::frame(&root)?;
-        text(&root, "Wins, losses & ties", (100, 86), 68, INK, HPos::Left)?;
-        let user = filter_user
+        let scope = filter_user
             .map(ToString::to_string)
             .unwrap_or_else(|| "Configured players".into());
         text(
             &root,
-            &super::chart_style::fit_text(
-                &format!(
-                    "{user}  ·  {} – {}  ·  {DAYS_SHOWN} days · {}",
-                    data.start.format("%d %b"),
-                    (data.end - Duration::days(1)).format("%d %b %Y"),
-                    data.tz
-                ),
-                40,
-                1300,
+            &format!(
+                "{} · Results",
+                super::chart_style::fit_text(&scope, 68, 960)
             ),
-            (100, 150),
-            40,
-            MUTED,
+            (100, 86),
+            68,
+            INK,
             HPos::Left,
         )?;
-        if let Some(notice) = notice {
-            text(
-                &root,
-                &super::chart_style::fit_text(notice, 36, 1300),
-                (100, 180),
-                36,
-                MUTED,
-                HPos::Left,
-            )?;
-        }
         let overall = win_rate(data.totals)
             .map(|rate| format!("{rate:.0}%"))
             .unwrap_or_else(|| "—".into());
-        text(&root, &overall, (100, 210), 74, INK, HPos::Left)?;
-        text(&root, "WIN RATE", (300, 222), 38, MUTED, HPos::Left)?;
-        text(
-            &root,
-            "90 days · ties excluded",
-            (300, 262),
-            36,
-            MUTED,
-            HPos::Left,
-        )?;
+        text(&root, &overall, (100, 150), 74, INK, HPos::Left)?;
+        text(&root, "WIN RATE", (300, 162), 38, MUTED, HPos::Left)?;
+        text(&root, "Ties excluded", (300, 202), 36, MUTED, HPos::Left)?;
         for (index, (x, label)) in [(760, "wins"), (980, "losses"), (1200, "ties")]
             .into_iter()
             .enumerate()
         {
             root.draw(&Rectangle::new(
-                [(x, 223), (x + 19, 242)],
+                [(x, 163), (x + 19, 182)],
                 COLORS[index].filled(),
             ))?;
             text(
                 &root,
                 &data.totals[index].to_string(),
-                (x + 35, 212),
+                (x + 35, 152),
                 58,
                 INK,
                 HPos::Left,
             )?;
-            text(&root, label, (x + 35, 257), 38, MUTED, HPos::Left)?;
+            text(&root, label, (x + 35, 197), 38, MUTED, HPos::Left)?;
         }
         text(
             &root,
             "HOW YOUR FORM CHANGED",
-            (LEFT, 303),
+            (LEFT, 243),
             40,
             INK,
             HPos::Left,
@@ -454,7 +429,7 @@ fn render_results_with_notice(
         text(
             &root,
             "20-match win rate · after each played day · ties excluded",
-            (LEFT, 348),
+            (LEFT, 288),
             36,
             MUTED,
             HPos::Left,
@@ -625,11 +600,11 @@ fn render_results_with_notice(
                 HPos::Center,
             )?;
         }
-        text(&root, "EVERY MATCH", (LEFT, 901), 40, INK, HPos::Left)?;
+        text(&root, "EVERY MATCH", (LEFT, 841), 40, INK, HPos::Left)?;
         text(
             &root,
             "One square per match · blank days = no recorded matches",
-            (LEFT, 935),
+            (LEFT, 875),
             36,
             MUTED,
             HPos::Left,
@@ -671,23 +646,23 @@ fn render_results_with_notice(
             "Daily matches: top to bottom"
         };
         text(&root, note, (RIGHT, legend_y), 36, MUTED, HPos::Right)?;
-        text(
-            &root,
-            if filter_user.is_some() {
-                "Available Leetify history; older matches may be missing."
-            } else {
-                "Shared matches counted once · Older Leetify matches may be missing."
-            },
-            (LEFT, legend_y + 45),
-            36,
-            MUTED,
-            HPos::Left,
-        )?;
+        let mut note_y = legend_y + 45;
+        if let Some(notice) = notice {
+            text(
+                &root,
+                &super::chart_style::fit_text(notice, 36, (RIGHT - LEFT) as u32),
+                (LEFT, note_y),
+                36,
+                MUTED,
+                HPos::Left,
+            )?;
+            note_y += 45;
+        }
         if !data.exclusions.is_empty() {
             text(
                 &root,
                 &super::chart_style::fit_text(&data.exclusions, 36, (RIGHT - LEFT) as u32),
-                (LEFT, legend_y + 90),
+                (LEFT, note_y),
                 36,
                 MUTED,
                 HPos::Left,

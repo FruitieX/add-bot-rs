@@ -108,12 +108,15 @@ matches and counts shared matches with other configured players, without
 claiming they were on the same team.
 
 Electricity bars use the original fixed Viridis price scale: cheaper intervals
-are yellow/green, while expensive intervals become blue/purple.
+are yellow/green, while expensive intervals become blue/purple. Elapsed prices
+and the background to the left of NOW are gray; the current interval splits
+at the current time. Hourly ticks and a price grid remain visible.
 
 Results and both activity styles cover exactly 90 calendar dates, including
 today, using the bot's `--tz` timezone (for example `--tz Europe/Helsinki`; the
-default remains UTC). Charts show their scope, timezone, and available-history
-limitation inside the image. They default to all configured players; add
+default remains UTC). Activity and results put the player scope in the title;
+routine date/timezone subtitles and generic history notes are omitted. Actual
+partial-data or excluded-match notices remain visible. They default to all configured players; add
 `@username` for an individual view. Global results omit shared matches where
 configured players faced each other, including tied games verified from team
 rosters. Shared ties with unavailable rosters are omitted with an explanation.
