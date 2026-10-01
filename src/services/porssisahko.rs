@@ -87,6 +87,14 @@ pub async fn get_price_chart() -> Result<Vec<u8>> {
     render_price_chart(&get_latest_prices().await?, Utc::now(), TZ, None)
 }
 
+fn price_color(price: f32) -> RGBColor {
+    // The previous chart offset Viridis by 20% and capped prices at 30 c/kWh.
+    // Negative prices keep the cheapest shade rather than wrapping unsigned values.
+    let t = 1.0 - (price.max(0.0) + 6.0).min(36.0) as f64 / 36.0;
+    let color = colorous::VIRIDIS.eval_continuous(t);
+    RGBColor(color.r, color.g, color.b)
+}
+
 pub(crate) fn render_price_chart(
     prices: &[HourlyPrice],
     now: DateTime<Utc>,
@@ -118,17 +126,17 @@ pub(crate) fn render_price_chart(
         let root = ChartBackend(BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)))
             .into_drawing_area();
         chart_style::frame(&root)?;
-        chart_style::text(&root, "Electricity prices", (100, 86), 46, INK, true)?;
+        chart_style::text(&root, "Electricity prices", (100, 86), 68, INK, true)?;
         chart_style::text(
             &root,
             &format!(
-                "{} – {}  ·  {} time  ·  15-minute prices",
-                start.format("%-d %b %Y"),
+                "{}–{} · {} · 15-minute prices",
+                start.format("%-d %b"),
                 end.format("%-d %b %Y"),
                 tz
             ),
             (100, 150),
-            22,
+            40,
             MUTED,
             false,
         )?;
@@ -140,15 +148,15 @@ pub(crate) fn render_price_chart(
                     .unwrap_or_else(|| "—".into()),
                 "NOW · c/kWh",
             ),
-            (590, format!("{low:.2}"), "PERIOD LOW · c/kWh"),
-            (1080, format!("{high:.2}"), "PERIOD HIGH · c/kWh"),
+            (590, format!("{low:.2}"), "LOW · c/kWh"),
+            (1080, format!("{high:.2}"), "HIGH · c/kWh"),
         ] {
-            chart_style::text(&root, &value, (x, 210), 46, INK, true)?;
-            chart_style::text(&root, label, (x, 270), 20, MUTED, true)?;
+            chart_style::text(&root, &value, (x, 210), 68, INK, true)?;
+            chart_style::text(&root, label, (x, 270), 38, MUTED, true)?;
         }
         let plot = root.clone().shrink((80, 330), (1340, 480));
         let mut ctx = ChartBuilder::on(&plot)
-            .set_label_area_size(LabelAreaPosition::Left, 48)
+            .set_label_area_size(LabelAreaPosition::Left, 90)
             .set_label_area_size(LabelAreaPosition::Bottom, 0)
             .margin_right(10)
             .margin_top(10)
@@ -163,18 +171,13 @@ pub(crate) fn render_price_chart(
             .axis_style(WHITE)
             .bold_line_style(BORDER)
             .light_line_style(WHITE)
-            .y_label_style(("sans-serif", 22).into_font().color(&MUTED))
+            .y_label_style(("sans-serif", 40).into_font().color(&MUTED))
             .y_label_formatter(&|v| format!("{v:.0}"))
             .set_all_tick_mark_size(0)
             .draw()?;
-        // Calm teal bars; higher-priced intervals become progressively darker.
+        // Restore the original fixed price scale: cheap yellow/green, expensive purple.
         ctx.draw_series(prices.iter().map(|p| {
-            let t = ((p.price - low) / (high - low).max(1.0)).clamp(0.0, 1.0);
-            let color = RGBColor(
-                (91.0 - 45.0 * t) as u8,
-                (183.0 - 70.0 * t) as u8,
-                (181.0 - 47.0 * t) as u8,
-            );
+            let color = price_color(p.price);
             Rectangle::new(
                 [
                     (p.start_date.with_timezone(&tz), 0.0),
@@ -194,6 +197,18 @@ pub(crate) fn render_price_chart(
         }
         if now >= first.start_date && now < last.start_date + Duration::minutes(15) {
             let local_now = now.with_timezone(&tz);
+            if let Some(current) = current {
+                ctx.draw_series(std::iter::once(PathElement::new(
+                    vec![
+                        (current.start_date.with_timezone(&tz), current.price),
+                        (
+                            (current.start_date + Duration::minutes(15)).with_timezone(&tz),
+                            current.price,
+                        ),
+                    ],
+                    RED.stroke_width(4),
+                )))?;
+            }
             ctx.draw_series(std::iter::once(PathElement::new(
                 vec![(local_now, minimum), (local_now, maximum)],
                 INK.mix(0.45).stroke_width(2),
@@ -203,7 +218,7 @@ pub(crate) fn render_price_chart(
                 &root,
                 "NOW",
                 (point.0.clamp(130, 1350) - 18, 310),
-                18,
+                36,
                 INK,
                 true,
             )?;
@@ -216,13 +231,13 @@ pub(crate) fn render_price_chart(
                 continue;
             }
             let coord = ctx.backend_coord(&(time, minimum));
-            if coord.0 - last_label_x < 110
+            if coord.0 - last_label_x < 160
                 || (index != 0 && (end - time).num_seconds() as f64 / duration < 0.035)
             {
                 continue;
             }
             last_label_x = coord.0;
-            let label = TextStyle::from(("sans-serif", 22))
+            let label = TextStyle::from(("sans-serif", 40))
                 .color(&MUTED)
                 .pos(Pos::new(HPos::Center, VPos::Top));
             root.draw(&Text::new(
@@ -240,9 +255,9 @@ pub(crate) fn render_price_chart(
             root.draw(&PathElement::new(vec![(100, 925), (1400, 925)], BORDER))?;
             chart_style::text(
                 &root,
-                "ESTIMATED ELECTRICITY · PER PC / MATCH",
+                "ESTIMATED COST · PER PC / MATCH",
                 (100, 955),
-                23,
+                40,
                 INK,
                 true,
             )?;
@@ -250,33 +265,28 @@ pub(crate) fn render_price_chart(
             for (label, cost) in &panel.rows {
                 chart_style::text(
                     &root,
-                    &chart_style::fit_text(label, 24, 980),
+                    &chart_style::fit_text(label, 42, 980),
                     (100, y),
-                    24,
+                    42,
                     INK,
                     false,
                 )?;
                 chart_style::text(
                     &root,
-                    &chart_style::fit_text(cost, 24, 260),
+                    &chart_style::fit_text(cost, 42, 260),
                     (1120, y),
-                    24,
+                    42,
                     ACCENT,
                     true,
                 )?;
-                y += 44;
+                y += 56;
             }
             y += 15;
             for note in &panel.notes {
-                chart_style::text(
-                    &root,
-                    &chart_style::fit_text(note, 20, 1300),
-                    (100, y),
-                    20,
-                    MUTED,
-                    false,
-                )?;
-                y += 30;
+                for line in chart_style::wrap_text(note, 36, 1300) {
+                    chart_style::text(&root, &line, (100, y), 36, MUTED, false)?;
+                    y += 44;
+                }
             }
         }
         root.present()?;
@@ -379,7 +389,7 @@ mod tests {
             assert_eq!(image.get_pixel(0, 0).0, [243, 246, 249]);
             assert_eq!(image.get_pixel(100, image.height() - 40).0, [255, 255, 255]);
             if let Some(panel) = panel {
-                let y = 1005 + (panel.rows.len() - 1) as u32 * 44;
+                let y = 1005 + (panel.rows.len() - 1) as u32 * 56;
                 assert!(
                     (y..y + 30).any(|y| (1120..1350).any(|x| image.get_pixel(x, y).0 != [255; 3]))
                 );

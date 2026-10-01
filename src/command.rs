@@ -25,9 +25,9 @@ Use any HHMM time for a timed queue. Predictions use the latest 30 matches;
 /lastplayed — Last verified squad match and teammates.
 /stats — Leetify stats and recent form.
 /form — Recent match form.
-/activity — Calendar of recorded games over the last 90 days.
-/activity bars — Original daily bar chart.
-/activity @username bars — Original bar chart for a player.
+/activity — Daily bars of recorded games over the last 90 days.
+/activity calendar — Calendar heatmap of recorded games.
+/activity @username — Daily bar chart for a player.
 /results — Win-rate trend and results over the last 90 days.
 
 Player stats default to yourself; add <code>@username</code> to view another player.
@@ -107,8 +107,8 @@ pub enum RecentFormStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivityStyle {
-    #[default]
     Calendar,
+    #[default]
     Bars,
 }
 
@@ -808,8 +808,8 @@ mod tests {
     }
 
     #[test]
-    fn activity_keeps_bars_available_with_either_argument_order() {
-        for text in ["/activity", "/activity calendar"] {
+    fn activity_defaults_to_bars_and_keeps_calendar_with_either_argument_order() {
+        for text in ["/activity calendar", "/games calendar", "/daily calendar"] {
             assert!(matches!(
                 parse_cmd(text).unwrap(),
                 Some(Command::Activity {
@@ -819,6 +819,7 @@ mod tests {
             ));
         }
         for text in [
+            "/activity @username",
             "/activity @username bars",
             "/activity bars @username",
             "/games bars @username",
@@ -831,13 +832,27 @@ mod tests {
                 })
             ));
         }
-        assert!(matches!(
-            parse_cmd("/activity bars").unwrap(),
-            Some(Command::Activity {
-                for_user: None,
-                style: ActivityStyle::Bars
-            })
-        ));
+        for text in ["/activity", "/activity bars", "/games", "/played", "/daily"] {
+            assert!(matches!(
+                parse_cmd(text).unwrap(),
+                Some(Command::Activity {
+                    for_user: None,
+                    style: ActivityStyle::Bars
+                })
+            ));
+        }
+        for text in [
+            "/activity calendar @username",
+            "/activity @username calendar",
+        ] {
+            assert!(matches!(
+                parse_cmd(text).unwrap(),
+                Some(Command::Activity {
+                    for_user: Some(_),
+                    style: ActivityStyle::Calendar
+                })
+            ));
+        }
         for text in [
             "/activity bars calendar",
             "/activity bars bars",

@@ -79,6 +79,42 @@ pub(crate) fn fit_text(value: &str, size: u32, max_width: u32) -> String {
     "…".into()
 }
 
+/// Wrap explanatory text so increasing the font never removes its meaning.
+pub(crate) fn wrap_text(value: &str, size: u32, max_width: u32) -> Vec<String> {
+    let fits = |value: &str| {
+        layout_text(value, size, false)
+            .bounds
+            .is_none_or(|b| b.max.x - b.min.x <= max_width as f32)
+    };
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in value.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if fits(&candidate) {
+            line = candidate;
+            continue;
+        }
+        if !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        for character in word.chars() {
+            let candidate = format!("{line}{character}");
+            if !line.is_empty() && !fits(&candidate) {
+                lines.push(std::mem::take(&mut line));
+            }
+            line.push(character);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ChartPanel {
     pub rows: Vec<(String, String)>,
@@ -87,6 +123,11 @@ pub(crate) struct ChartPanel {
 
 impl ChartPanel {
     pub fn height(&self) -> u32 {
-        150 + self.rows.len() as u32 * 44 + self.notes.len() as u32 * 30
+        let lines: usize = self
+            .notes
+            .iter()
+            .map(|note| wrap_text(note, 36, 1300).len())
+            .sum();
+        150 + self.rows.len() as u32 * 56 + lines as u32 * 44
     }
 }

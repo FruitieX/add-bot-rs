@@ -26,9 +26,9 @@ use crate::{
 
 const DAYS_SHOWN: usize = 90;
 const FORM_WINDOW: usize = 20;
-const LEFT: i32 = 128;
-const RIGHT: i32 = 1370;
-const TOP: i32 = 370;
+const LEFT: i32 = 150;
+const RIGHT: i32 = 1330;
+const TOP: i32 = 390;
 const BOTTOM: i32 = 810;
 const TILE_TOP: i32 = 970;
 const TILE_STEP: i32 = 17;
@@ -314,7 +314,12 @@ fn text(
     color: RGBColor,
     anchor: HPos,
 ) -> Result<()> {
-    let bold = size >= 23 || value == "WIN RATE" || value == "EVEN" || value.starts_with("MORE ");
+    let bold = size >= 58
+        || value == "WIN RATE"
+        || value == "EVEN"
+        || value.starts_with("MORE ")
+        || value == "HOW YOUR FORM CHANGED"
+        || value == "EVERY MATCH";
     let layout = layout_text(value, size, bold);
     let Some(bounds) = layout.bounds else {
         return Ok(());
@@ -371,34 +376,38 @@ fn render_results_with_notice(
 ) -> Result<Vec<u8>> {
     let rows = data.daily.iter().map(Vec::len).max().unwrap_or(0).max(4);
     let legend_y = TILE_TOP + rows as i32 * TILE_STEP + 28;
-    let height = (legend_y + 130) as u32;
+    let height = (legend_y + 180) as u32;
     let mut buffer = vec![0; WIDTH as usize * height as usize * 3];
     {
         let root = BitMapBackend::with_buffer(&mut buffer, (WIDTH, height)).into_drawing_area();
         super::chart_style::frame(&root)?;
-        text(&root, "Wins, losses & ties", (100, 86), 46, INK, HPos::Left)?;
+        text(&root, "Wins, losses & ties", (100, 86), 68, INK, HPos::Left)?;
         let user = filter_user
             .map(ToString::to_string)
             .unwrap_or_else(|| "Configured players".into());
         text(
             &root,
-            &format!(
-                "{user}  ·  {} – {}  ·  {DAYS_SHOWN} days · {}",
-                data.start.format("%d %b %Y"),
-                (data.end - Duration::days(1)).format("%d %b %Y"),
-                data.tz
+            &super::chart_style::fit_text(
+                &format!(
+                    "{user}  ·  {} – {}  ·  {DAYS_SHOWN} days · {}",
+                    data.start.format("%d %b"),
+                    (data.end - Duration::days(1)).format("%d %b %Y"),
+                    data.tz
+                ),
+                40,
+                1300,
             ),
             (100, 150),
-            22,
+            40,
             MUTED,
             HPos::Left,
         )?;
         if let Some(notice) = notice {
             text(
                 &root,
-                &super::chart_style::fit_text(notice, 18, 1300),
+                &super::chart_style::fit_text(notice, 36, 1300),
                 (100, 180),
-                18,
+                36,
                 MUTED,
                 HPos::Left,
             )?;
@@ -406,17 +415,17 @@ fn render_results_with_notice(
         let overall = win_rate(data.totals)
             .map(|rate| format!("{rate:.0}%"))
             .unwrap_or_else(|| "—".into());
-        text(&root, &overall, (100, 210), 52, INK, HPos::Left)?;
-        text(&root, "WIN RATE", (260, 222), 20, MUTED, HPos::Left)?;
+        text(&root, &overall, (100, 210), 74, INK, HPos::Left)?;
+        text(&root, "WIN RATE", (300, 222), 38, MUTED, HPos::Left)?;
         text(
             &root,
-            "90-day period · ties excluded",
-            (260, 253),
-            18,
+            "90 days · ties excluded",
+            (300, 262),
+            36,
             MUTED,
             HPos::Left,
         )?;
-        for (index, (x, label)) in [(690, "wins"), (915, "losses"), (1155, "ties")]
+        for (index, (x, label)) in [(760, "wins"), (980, "losses"), (1200, "ties")]
             .into_iter()
             .enumerate()
         {
@@ -428,25 +437,25 @@ fn render_results_with_notice(
                 &root,
                 &data.totals[index].to_string(),
                 (x + 35, 212),
-                38,
+                58,
                 INK,
                 HPos::Left,
             )?;
-            text(&root, label, (x + 35, 257), 20, MUTED, HPos::Left)?;
+            text(&root, label, (x + 35, 257), 38, MUTED, HPos::Left)?;
         }
         text(
             &root,
             "HOW YOUR FORM CHANGED",
-            (LEFT, 309),
-            23,
+            (LEFT, 303),
+            40,
             INK,
             HPos::Left,
         )?;
         text(
             &root,
-            "Rolling 20-match win rate · after each day's last match · ties excluded",
-            (LEFT, 341),
-            19,
+            "20-match win rate · after each played day · ties excluded",
+            (LEFT, 348),
+            36,
             MUTED,
             HPos::Left,
         )?;
@@ -484,7 +493,7 @@ fn render_results_with_notice(
                 &root,
                 &format!("{rate:.0}%"),
                 (LEFT - 20, y - 12),
-                20,
+                38,
                 MUTED,
                 HPos::Right,
             )?;
@@ -560,7 +569,7 @@ fn render_results_with_notice(
             &root,
             "MORE WINS THAN LOSSES",
             (LEFT + 18, TOP + 14),
-            18,
+            36,
             RGBColor(39, 157, 72),
             HPos::Left,
         )?;
@@ -568,7 +577,7 @@ fn render_results_with_notice(
             &root,
             "MORE LOSSES THAN WINS",
             (LEFT + 18, BOTTOM - 36),
-            18,
+            36,
             RGBColor(216, 57, 49),
             HPos::Left,
         )?;
@@ -576,7 +585,7 @@ fn render_results_with_notice(
             &root,
             "EVEN",
             (RIGHT + 16, even_y - 10),
-            17,
+            36,
             MUTED,
             HPos::Left,
         )?;
@@ -592,7 +601,7 @@ fn render_results_with_notice(
                 &root,
                 message,
                 ((LEFT + RIGHT) / 2, even_y + 40),
-                23,
+                40,
                 MUTED,
                 HPos::Center,
             )?;
@@ -611,17 +620,17 @@ fn render_results_with_notice(
                 &root,
                 &date.format("%d %b").to_string(),
                 (x, BOTTOM + 23),
-                20,
+                38,
                 MUTED,
                 HPos::Center,
             )?;
         }
-        text(&root, "EVERY MATCH", (LEFT, 901), 23, INK, HPos::Left)?;
+        text(&root, "EVERY MATCH", (LEFT, 901), 40, INK, HPos::Left)?;
         text(
             &root,
-            "Same dates as above · one square per match · blank days mean no recorded matches",
+            "One square per match · blank days = no recorded matches",
             (LEFT, 935),
-            19,
+            36,
             MUTED,
             HPos::Left,
         )?;
@@ -646,7 +655,7 @@ fn render_results_with_notice(
                 ))?;
             }
         }
-        for (index, (x, label)) in [(LEFT, "Win"), (LEFT + 130, "Loss"), (LEFT + 260, "Tie")]
+        for (index, (x, label)) in [(LEFT, "Win"), (LEFT + 150, "Loss"), (LEFT + 320, "Tie")]
             .into_iter()
             .enumerate()
         {
@@ -654,32 +663,32 @@ fn render_results_with_notice(
                 [(x, legend_y), (x + 14, legend_y + 14)],
                 COLORS[index].filled(),
             ))?;
-            text(&root, label, (x + 25, legend_y - 2), 19, MUTED, HPos::Left)?;
+            text(&root, label, (x + 25, legend_y - 2), 36, MUTED, HPos::Left)?;
         }
         let note = if inactive_gaps {
-            "Dotted spans = no matches for over 3 days"
+            "Dotted = no matches for >3 days"
         } else {
-            "Matches within each day run top to bottom"
+            "Daily matches: top to bottom"
         };
-        text(&root, note, (RIGHT, legend_y), 17, MUTED, HPos::Right)?;
+        text(&root, note, (RIGHT, legend_y), 36, MUTED, HPos::Right)?;
         text(
             &root,
             if filter_user.is_some() {
                 "Available Leetify history; older matches may be missing."
             } else {
-                "Shared matches counted once · Available Leetify history; older matches may be missing."
+                "Shared matches counted once · Older Leetify matches may be missing."
             },
-            (LEFT, legend_y + 35),
-            17,
+            (LEFT, legend_y + 45),
+            36,
             MUTED,
             HPos::Left,
         )?;
         if !data.exclusions.is_empty() {
             text(
                 &root,
-                &super::chart_style::fit_text(&data.exclusions, 17, (RIGHT - LEFT) as u32),
-                (LEFT, legend_y + 62),
-                17,
+                &super::chart_style::fit_text(&data.exclusions, 36, (RIGHT - LEFT) as u32),
+                (LEFT, legend_y + 90),
+                36,
                 MUTED,
                 HPos::Left,
             )?;

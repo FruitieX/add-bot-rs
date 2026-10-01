@@ -95,16 +95,20 @@ make teammate records unavailable rather than silently undercounting games.
 All raster charts share the corrected glyph layout used by `/results`, including
 activity/electricity captions, axes, legends, and annotations.
 They also share a light background, rounded white card, typography, and muted
-labels. `/activity` defaults to a calendar heatmap of unique recorded matches
-per day, with match/active-day/busiest-day summaries and separate player totals.
-Shared matches count once in the calendar; individual totals overlap. Targeted
-activity shows that player's matches and counts shared matches with other
-configured players, without claiming they were on the same team.
+labels, with larger fonts for embedded Telegram previews. `/activity` defaults
+to the segmented daily bar chart; `/activity @username` selects a player.
+Its participant segments remain equal shares of each day's total; the legend
+shows actual recorded counts separately. `/activity bars` remains an explicit
+alias for the default style.
 
-The original segmented bar chart remains available through `/activity bars`
-or `/activity @username bars` (either argument order works). Its participant
-segments remain equal shares of each day's total; the legend shows actual
-recorded counts separately.
+Use `/activity calendar` or `/activity @username calendar` for the calendar
+heatmap (either argument order works). Shared matches count once in the
+calendar; individual totals overlap. Targeted activity shows that player's
+matches and counts shared matches with other configured players, without
+claiming they were on the same team.
+
+Electricity bars use the original fixed Viridis price scale: cheaper intervals
+are yellow/green, while expensive intervals become blue/purple.
 
 Results and both activity styles cover exactly 90 calendar dates, including
 today, using the bot's `--tz` timezone (for example `--tz Europe/Helsinki`; the
