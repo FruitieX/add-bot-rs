@@ -215,12 +215,13 @@ fn render_calendar(
             true,
         )?;
         for (index, (name, count)) in data.players.iter().take(10).enumerate() {
-            let x = 100 + (index % 2) as i32 * 650;
+            // Read rankings down each column, then continue in the next one.
+            let x = 100 + (index / rows) as i32 * 650;
             let text = format!("{} · {count}", chart_style::fit_text(name, 40, 500));
             chart_style::text(
                 &root,
                 &text,
-                (x, 840 + (index / 2) as i32 * 44),
+                (x, 840 + (index % rows) as i32 * 44),
                 40,
                 INK,
                 false,
@@ -742,8 +743,8 @@ fn render_activity_bars(
             entries.push(("Others".into(), others_color));
         }
         for (index, (label, color)) in entries.iter().enumerate() {
-            let x = 100 + (index % 2) as i32 * 660;
-            let y = 898 + (index / 2) as i32 * 44;
+            let x = 100 + (index / legend_rows) as i32 * 660;
+            let y = 898 + (index % legend_rows) as i32 * 44;
             root.draw(&Rectangle::new(
                 [(x, y + 3), (x + 18, y + 21)],
                 color.filled(),
