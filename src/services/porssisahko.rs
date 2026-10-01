@@ -161,20 +161,6 @@ pub(crate) fn render_price_chart(
             .margin_right(10)
             .margin_top(10)
             .build_cartesian_2d(start..end, minimum..maximum)?;
-        ctx.configure_mesh()
-            // Plotters' datetime tick generator overflows for a zero tick budget.
-            // Native labels are hidden; the readable date/time labels are below.
-            .x_labels(2)
-            .x_label_formatter(&|_| String::new())
-            .y_labels(6)
-            .disable_x_mesh()
-            .axis_style(WHITE)
-            .bold_line_style(BORDER)
-            .light_line_style(WHITE)
-            .y_label_style(("sans-serif", 40).into_font().color(&MUTED))
-            .y_label_formatter(&|v| format!("{v:.0}"))
-            .set_all_tick_mark_size(0)
-            .draw()?;
         // Restore the original fixed price scale: cheap yellow/green, expensive purple.
         ctx.draw_series(prices.iter().map(|p| {
             let color = price_color(p.price);
@@ -189,6 +175,43 @@ pub(crate) fn render_price_chart(
                 color.filled(),
             )
         }))?;
+        // Draw guides over the bars as well as the background, so prices can
+        // be read across filled intervals. Keep manual time ticks aligned with
+        // the local-hour labels rather than Plotters' automatic date ticks.
+        ctx.configure_mesh()
+            .x_labels(2)
+            .x_label_formatter(&|_| String::new())
+            .y_labels(10)
+            .y_max_light_lines(1)
+            .disable_x_mesh()
+            .axis_style(MUTED.mix(0.65))
+            .bold_line_style(RGBColor(150, 150, 150).mix(0.55))
+            .light_line_style(RGBColor(190, 190, 190).mix(0.45))
+            .y_label_style(("sans-serif", 40).into_font().color(&MUTED))
+            .y_label_formatter(&|v| format!("{v:.0}"))
+            .set_all_tick_mark_size(0)
+            .set_tick_mark_size(LabelAreaPosition::Left, 8)
+            .draw()?;
+        for (index, price) in prices.iter().enumerate() {
+            let time = price.start_date.with_timezone(&tz);
+            if index != 0 && time.minute() != 0 {
+                continue;
+            }
+            let major = index == 0 || time.hour() % 6 == 0;
+            ctx.draw_series(std::iter::once(PathElement::new(
+                vec![(time, minimum), (time, maximum)],
+                if major {
+                    RGBColor(150, 150, 150).mix(0.55)
+                } else {
+                    RGBColor(190, 190, 190).mix(0.45)
+                },
+            )))?;
+            let point = ctx.backend_coord(&(time, minimum));
+            root.draw(&PathElement::new(
+                vec![point, (point.0, point.1 + if major { 12 } else { 6 })],
+                MUTED.mix(0.8).stroke_width(if major { 2 } else { 1 }),
+            ))?;
+        }
         if minimum < 0.0 {
             ctx.draw_series(std::iter::once(PathElement::new(
                 vec![(start, 0.0), (end, 0.0)],
