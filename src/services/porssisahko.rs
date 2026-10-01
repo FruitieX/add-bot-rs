@@ -225,6 +225,7 @@ pub(crate) fn render_price_chart(
         }
         let duration = (end - start).num_seconds() as f64;
         let mut last_label_x = -1000;
+        let mut last_label_date = None;
         for (index, p) in prices.iter().enumerate() {
             let time = p.start_date.with_timezone(&tz);
             if index != 0 && (time.minute() != 0 || time.hour() % 6 != 0) {
@@ -245,11 +246,14 @@ pub(crate) fn render_price_chart(
                 (coord.0, 835),
                 label.clone(),
             ))?;
-            root.draw(&Text::new(
-                time.format("%-d %b").to_string(),
-                (coord.0, 867),
-                label,
-            ))?;
+            if last_label_date != Some(time.date_naive()) {
+                root.draw(&Text::new(
+                    time.format("%-d %b").to_string(),
+                    (coord.0, 867),
+                    label,
+                ))?;
+                last_label_date = Some(time.date_naive());
+            }
         }
         if let Some(panel) = panel {
             root.draw(&PathElement::new(vec![(100, 925), (1400, 925)], BORDER))?;
