@@ -101,9 +101,9 @@ fn queue_cost_panel(
         })
         .collect();
     let notes = match duration {
-        Some(duration) => vec![format!("{power_watts:.0} W PC · Estimated {:.0}-minute match from {} recent matches' rounds", duration.minutes, duration.matches_used),
-            "Includes spot energy + variable transfer; excludes fixed fees and electricity tax".into(),
-            "Unavailable = missing price coverage or unusable match-estimate inputs".into()],
+        Some(_) => {
+            vec!["Unavailable = missing price coverage or unusable match-estimate inputs".into()]
+        }
         None => vec!["Estimates unavailable: no usable round data in recent match history".into()],
     };
     let mut panel = ChartPanel { rows, notes };
@@ -118,7 +118,7 @@ mod tests {
     use super::*;
     use chrono::{Duration, NaiveTime, TimeZone};
     #[test]
-    fn queue_panel_labels_per_pc_cost_timing_and_assumptions() {
+    fn queue_panel_labels_per_pc_cost_timing_and_unavailable_estimates() {
         let tz = chrono_tz::Europe::Helsinki;
         let now = tz.with_ymd_and_hms(2026, 9, 30, 18, 0, 0).unwrap();
         let start = now + Duration::minutes(90);
@@ -137,11 +137,10 @@ mod tests {
         };
         let panel = queue_cost_panel(&queues, now, &prices, Some(&duration), 1000.0, 2.0);
         assert_eq!(panel.rows, vec![("Today 19:30".into(), "€0.06".into())]);
-        assert!(panel.notes[0].contains("1000 W PC · Estimated 30-minute match"));
-        assert_eq!(panel.notes.len(), 2);
+        assert!(panel.notes.is_empty());
         let panel = queue_cost_panel(&queues, now, &[], Some(&duration), 500.0, 2.0);
         assert_eq!(panel.rows[0].1, "Unavailable");
-        assert!(panel.notes[2].contains("missing price coverage"));
+        assert!(panel.notes[0].contains("missing price coverage"));
         let panel = queue_cost_panel(&queues, now, &prices, None, 500.0, 2.0);
         assert_eq!(panel.rows[0].1, "Unavailable");
         assert!(panel.notes[0].contains("no usable round data"));

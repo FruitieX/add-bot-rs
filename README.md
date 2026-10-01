@@ -224,8 +224,9 @@ area. No matches, short histories, and tie-only histories have explicit messages
 grid lines, and a current-time marker. When the chat has active CS2 queues,
 their electricity-cost estimates appear in a panel beneath the plot, labelled
 per PC per estimated match. No separate forecast message is sent. The panel
-shows the PC load, estimated duration and sample, included variable charges,
-and unavailable estimates. Its height grows with the number of queues.
+shows compact queue costs and explains unavailable estimates when necessary.
+Its height grows with the number of queues; the calculation assumptions are
+documented below rather than repeated in every image.
 
 - An instant queue is priced as if the match starts now, because its actual
   fill time is unknown.

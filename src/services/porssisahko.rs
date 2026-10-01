@@ -435,11 +435,7 @@ mod tests {
                 ("Today 19:30".into(), "€0.06".into()),
                 ("Instant queue · If filled now".into(), "€0.05".into()),
             ],
-            notes: vec![
-                "500 W PC · Estimated 48-minute match from 30 recent matches' rounds".into(),
-                "Includes spot energy + variable transfer; excludes fixed fees and electricity tax"
-                    .into(),
-            ],
+            notes: vec![],
         };
         fs::write(
             "target/electricity-preview.png",
