@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.2.0](https://github.com/FruitieX/add-bot-rs/compare/v0.1.1...v0.2.0) (2026-10-03)
+
+
+### Features
+
+* add calendar activity and clarify stats coverage ([22d2099](https://github.com/FruitieX/add-bot-rs/commit/22d209934a56b99c50970baab478a43f432e4953))
+* add recent form icon themes and random emoji style ([c5f1709](https://github.com/FruitieX/add-bot-rs/commit/c5f170953ade4a882797592107c16bde0bb134a3))
+* expand random form emoji into outcome categories ([d82c140](https://github.com/FruitieX/add-bot-rs/commit/d82c14055e49e7b72d7473f8d26ded7ff4a22baa))
+* explain command failures and add concise help and build version ([2593745](https://github.com/FruitieX/add-bot-rs/commit/259374585b47dae52a2665aeadda5a513cbc206c))
+* **queue:** show predicted winrate transitions ([220f84e](https://github.com/FruitieX/add-bot-rs/commit/220f84e3fc7324a97aa6640589fac7ba2b78188d))
+* refresh leaderboards and verify squad match history ([79d4e8e](https://github.com/FruitieX/add-bot-rs/commit/79d4e8e4560bdabd4d636a96e979873613e1fe0b))
+* refresh queue and player output and share chart typography ([5247783](https://github.com/FruitieX/add-bot-rs/commit/5247783e201772ba9e3900b7c6615da39be385db))
+* support custom recent form themes from three emoji ([974cb97](https://github.com/FruitieX/add-bot-rs/commit/974cb97adf302329c6ef591cb3b62e733404a863))
+* unify chart styling and embed queue electricity estimates ([94e01da](https://github.com/FruitieX/add-bot-rs/commit/94e01dae0a5ff840731de85d22d4d8b2d3bd8e22))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate cached to v4.0.1 ([#817](https://github.com/FruitieX/add-bot-rs/issues/817)) ([05f318a](https://github.com/FruitieX/add-bot-rs/commit/05f318ab75e052170ece368699144a84ba8690a5))
+* **deps:** update rust crate clap to v4.6.7 ([#807](https://github.com/FruitieX/add-bot-rs/issues/807)) ([f821468](https://github.com/FruitieX/add-bot-rs/commit/f82146806d029b9acc917a832e29b32f8f276033))
+* **deps:** update rust crate config to v0.15.26 ([#813](https://github.com/FruitieX/add-bot-rs/issues/813)) ([511b78b](https://github.com/FruitieX/add-bot-rs/commit/511b78b36b7532f05d3e91eb1b691813de84e6d3))
+* **deps:** update rust crate config to v0.15.27 ([#814](https://github.com/FruitieX/add-bot-rs/issues/814)) ([0c4af4f](https://github.com/FruitieX/add-bot-rs/commit/0c4af4f9e8cd5e606947f36832da9a6ccdae37c7))
+* **deps:** update rust crate lazy_static to v1.5.1 ([#816](https://github.com/FruitieX/add-bot-rs/issues/816)) ([1a392ff](https://github.com/FruitieX/add-bot-rs/commit/1a392ff46174a29d056ed666164f7e6532181a25))
+* **deps:** update rust crate rand to v0.10.3 ([#815](https://github.com/FruitieX/add-bot-rs/issues/815)) ([eacd571](https://github.com/FruitieX/add-bot-rs/commit/eacd57192dc3645f4b2c972c2cb06cb04af29c0c))
+* **deps:** update rust crate tokio to v1.53.2 ([#819](https://github.com/FruitieX/add-bot-rs/issues/819)) ([2ae5250](https://github.com/FruitieX/add-bot-rs/commit/2ae52507f643a8e3df2cbd1b33efebb2640aeea0))
+* improve chart preview readability and restore chart defaults ([2c0b756](https://github.com/FruitieX/add-bot-rs/commit/2c0b7566366366e85e159f2be7fd98371a472403))
+* label electricity chart dates only when they change ([f14feed](https://github.com/FruitieX/add-bot-rs/commit/f14feed0df7c3664812c29b37080ed190dc45e6e))
+* make queues durable and gate deployment on checks ([ee290e9](https://github.com/FruitieX/add-bot-rs/commit/ee290e946508b49e0eca2547722dc5b9e7319572))
+* order activity player legends down each column ([24d1430](https://github.com/FruitieX/add-bot-rs/commit/24d143032a9e665096c6786b18232c590ea02793))
+* organize help into concise command groups ([aed3084](https://github.com/FruitieX/add-bot-rs/commit/aed308426ec7cd00eb9f41c3390589097527762f))
+* **queue:** omit unavailable initial winrate ([252ffa3](https://github.com/FruitieX/add-bot-rs/commit/252ffa36c14517365a074599b8c68d346c29d77e))
+* **queue:** omit unavailable winrate ([4098ac3](https://github.com/FruitieX/add-bot-rs/commit/4098ac3fe546bafca2e10e76b828e274c2109b32))
+* remove routine electricity estimate footnotes ([0d60fe0](https://github.com/FruitieX/add-bot-rs/commit/0d60fe0676e2ac1834059145a83a21fa6a0e2993))
+* restore electricity chart grid and hourly ticks ([46a1346](https://github.com/FruitieX/add-bot-rs/commit/46a13463fb78c9efdd06c83c71a9e032c76811c4))
+* send help using HTML to avoid MarkdownV2 parse errors ([3605660](https://github.com/FruitieX/add-bot-rs/commit/360566077c5acfcf634d65c31fb97b8f4d153108))
+* simplify chart headers and mute elapsed electricity prices ([da31790](https://github.com/FruitieX/add-bot-rs/commit/da31790e4ec738052ca65bc8e349f5f1923bf0a7))
+* **stats:** format recent results as code block ([54923b7](https://github.com/FruitieX/add-bot-rs/commit/54923b7357499e1e89507e7d0adb066998dce980))
+
 ## [0.1.1](https://github.com/FruitieX/add-bot-rs/compare/v0.1.0...v0.1.1) (2026-09-14)
 
 
