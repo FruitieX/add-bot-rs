@@ -24,8 +24,8 @@ use crate::{
 };
 
 /// Generate a bar chart over the last 90 days of how many unique games the configured
-/// players have played. The public Leetify API no longer exposes teammate rosters,
-/// so games are deduplicated by match ID instead of being restricted to configured teams.
+/// players have played together. The public Leetify API no longer exposes teammate rosters,
+/// so games are matched across player histories by match ID.
 use crate::types::Username;
 
 fn game_key(game: &LeetifyGame) -> String {
@@ -38,6 +38,27 @@ fn game_key(game: &LeetifyGame) -> String {
             game.scores.1
         )
     })
+}
+
+/// Keep only games found in at least two configured players' histories.
+fn shared_games(per_player: &[(String, Vec<LeetifyGame>)]) -> Vec<(String, Vec<LeetifyGame>)> {
+    let mut players_per_game: HashMap<String, usize> = HashMap::new();
+    for (_, games) in per_player {
+        for key in games.iter().map(game_key).collect::<HashSet<_>>() {
+            *players_per_game.entry(key).or_default() += 1;
+        }
+    }
+    per_player
+        .iter()
+        .map(|(name, games)| {
+            let shared = games
+                .iter()
+                .filter(|game| players_per_game[&game_key(game)] > 1)
+                .cloned()
+                .collect();
+            (name.clone(), shared)
+        })
+        .collect()
 }
 
 struct CalendarData {
@@ -279,7 +300,10 @@ pub async fn get_activity_chart(
         .collect();
     let player_results = futures::future::join_all(futures).await;
 
-    let histories = collect_player_histories(player_results, filter_user)?;
+    let mut histories = collect_player_histories(player_results, filter_user)?;
+    if filter_user.is_none() {
+        histories.games = shared_games(&histories.games);
+    }
     let all_games = histories
         .games
         .iter()
@@ -831,6 +855,27 @@ mod tests {
             vec![("Alice".into(), 2), ("Bob".into(), 1)]
         );
         assert_eq!(selected.counts.iter().sum::<u32>(), 2);
+    }
+
+    #[test]
+    fn global_view_keeps_only_games_with_another_configured_player() {
+        let together = sample_game("together", "2026-09-29T12:00:00Z");
+        let solo = sample_game("solo", "2026-09-28T12:00:00Z");
+        let players = vec![
+            ("Alice".into(), vec![together.clone(), solo.clone(), solo]),
+            ("Bob".into(), vec![together]),
+            ("Carol".into(), vec![]),
+        ];
+        let ids = |games: &[LeetifyGame]| {
+            games
+                .iter()
+                .map(|game| game.id.clone().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let shared = shared_games(&players);
+        assert_eq!(ids(&shared[0].1), ["together"]);
+        assert_eq!(ids(&shared[1].1), ["together"]);
+        assert!(shared[2].1.is_empty());
     }
 
     #[test]
