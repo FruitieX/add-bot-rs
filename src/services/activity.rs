@@ -301,9 +301,7 @@ pub async fn get_activity_chart(
     let player_results = futures::future::join_all(futures).await;
 
     let mut histories = collect_player_histories(player_results, filter_user)?;
-    if filter_user.is_none() {
-        histories.games = shared_games(&histories.games);
-    }
+    histories.games = shared_games(&histories.games);
     let all_games = histories
         .games
         .iter()
@@ -858,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn global_view_keeps_only_games_with_another_configured_player() {
+    fn activity_keeps_only_games_with_another_configured_player() {
         let together = sample_game("together", "2026-09-29T12:00:00Z");
         let solo = sample_game("solo", "2026-09-28T12:00:00Z");
         let players = vec![
