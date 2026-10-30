@@ -89,3 +89,25 @@ pub fn read_settings() -> Result<Settings, config::ConfigError> {
 
     Ok(settings)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn example_settings_parse() {
+        let settings = config::Config::builder()
+            .add_source(config::File::from_str(
+                include_str!("../Settings.toml.example"),
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize::<Settings>()
+            .unwrap();
+        assert_eq!(settings.players.steamid_mappings.len(), 3);
+        assert_eq!(settings.weather.unwrap().display_name, "Helsinki, FI");
+        assert!(settings.leetify.is_none());
+        assert_eq!(settings.electricity.gaming_pc_power_watts, 500.0);
+    }
+}

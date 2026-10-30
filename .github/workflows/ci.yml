@@ -77,6 +77,9 @@ jobs:
         env:
           ADD_BOT_COMMIT: ${{ github.sha }}
 
+      - name: Smoke test the release binary
+        run: target/x86_64-unknown-linux-musl/release/add-bot --help
+
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
