@@ -25,9 +25,9 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+    let args = Args::parse();
     let settings = settings::read_settings()?;
 
-    let args = Args::parse();
     let tz: Tz = args.tz.parse()?;
     let sc = StateContainer::try_read_from_file(tz).await?;
 
