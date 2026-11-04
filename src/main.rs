@@ -32,7 +32,8 @@ async fn main() -> Result<()> {
     let sc = StateContainer::try_read_from_file(tz).await?;
 
     // Initialize the Telegram bot API.
-    pretty_env_logger::init();
+    // RUST_LOG overrides the default filter; without it, show warnings and errors.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let bot = Bot::with_client(&settings.teloxide.bot_api_token, client_from_env());
     let bot_username = bot.get_me().await?.username.clone().unwrap_or_default();
 
